@@ -215,6 +215,8 @@ class StateMachine:
             self._fishing_start_time = time.time()
             self._last_cursor_x = None # 记录上一帧的游标位置，用于预测速度
             self._seen_fishing_bar = False # 记录是否已经看到过耐力条
+            self._last_target_time = 0 # 每次抛竿重置测速时间戳
+            self._target_velocity = 0  # 每次抛竿重置测速历史
             
         elapsed = time.time() - self._fishing_start_time
         if elapsed > self.fishing_timeout:
@@ -239,6 +241,9 @@ class StateMachine:
 
         # 判断是否结束 (无论是成功还是鱼儿溜走，耐力条都会消失)
         if target_x is None or cursor_x is None:
+            # 安全保护：如果丢失目标，立刻释放所有按键，防止游标因为惯性飞出界
+            self.ctrl.release_all()
+            
             if not getattr(self, '_seen_fishing_bar', False):
                 # 还没看到过耐力条，说明还在播放上钩的过渡动画
                 # 增加一个初始等待超时，比如 5 秒
@@ -258,6 +263,8 @@ class StateMachine:
                 self._missing_start_time = 0
                 self._last_cursor_x = None
                 self._seen_fishing_bar = False
+                self._last_target_time = 0  # 重置测速时间戳
+                self._target_velocity = 0   # 重置速度历史
                 self.current_state = self.STATE_RESULT
             return
         
@@ -265,60 +272,60 @@ class StateMachine:
         self._missing_start_time = 0
         self._seen_fishing_bar = True
 
-        # === 核心追踪算法 (自适应非线性 PID 阻尼控制) ===
-        # 计算偏差
-        # diff > 0 说明游标偏左，目标在右，需要向右追赶
-        # diff < 0 说明游标偏右，目标在左，需要向左追赶
+        # === 核心追踪算法 (自适应非线性 PID + 前馈控制) ===
         error = target_x - cursor_x
         abs_error = abs(error)
         
-        # 动态死区：根据当前绿条的实际宽度计算绝对安全区 (比如绿条宽度的 25%)
-        safe_zone = target_w * 0.25 if target_w else 10
-        
-        # 把偏差喂给真正的 PID 控制器，获取需要输出的“力”
-        # PID 的输出是一个有正负的数值，代表要按下的方向和强度
-        control_signal = self.pid.update(error)
-        abs_signal = abs(control_signal)
-
-        # 1. 如果游标稳稳在安全区内，松开所有按键，让其自然滑动
-        if abs_error <= safe_zone:
-            self.ctrl.release_all()
-            return
+        # 计算目标移动速度 (前馈预测)
+        now = time.time()
+        if getattr(self, '_last_target_time', 0) == 0:
+            self._last_target_x = target_x
+            self._last_target_time = now
+            target_velocity = 0
+        else:
+            dt = now - self._last_target_time
+            if dt > 0.001:
+                # 简单低通滤波平滑速度，防止图像抖动导致速度突变
+                raw_velocity = (target_x - self._last_target_x) / dt
+                old_velocity = getattr(self, '_target_velocity', 0)
+                target_velocity = old_velocity * 0.6 + raw_velocity * 0.4
+            else:
+                target_velocity = getattr(self, '_target_velocity', 0)
+                
+            self._last_target_x = target_x
+            self._last_target_time = now
+            self._target_velocity = target_velocity
             
-        # 2. 如果游标偏离，但控制信号出现反向（说明速度太快，PID 的 D 预测到即将过冲，产生了刹车信号）
-        if error > 0 and control_signal < -10:
-            # 目标在右，本来该按 D，但信号说要向左刹车
-            self.ctrl.release_all()
-            self.ctrl.key_tap('A', duration=0.01) # 物理急刹
-            return
-        elif error < 0 and control_signal > 10:
-            # 目标在左，本来该按 A，但信号说要向右刹车
-            self.ctrl.release_all()
-            self.ctrl.key_tap('D', duration=0.01)
-            return
-
-        # 3. 将 PID 强度映射为键盘的 PWM (脉宽调制) 点击时间
-        # 信号越强，点按时间越长（甚至直接长按）
-        t_hold_signal = 50 # 如果 PID 信号强度超过这个值，就视为需要长按
+        # 动态安全区：根据绿条宽度计算 (比如绿条宽度的 20%)
+        safe_zone = target_w * 0.20 if target_w else 10
         
-        # 信号强度转点击时长：0.005s 到 0.03s 的超高频微操
-        tap_duration = max(0.005, min(0.03, abs_signal / t_hold_signal * 0.03))
+        # PID 控制器计算基础偏差修正力
+        control_signal = self.pid.update(error)
+        
+        # 引入前馈控制 (Feed-Forward)
+        # 目标移动得越快，我们需要提前施加的同向“力”就越大
+        ff_gain = 0.15 # 前馈增益系数
+        total_signal = control_signal + target_velocity * ff_gain
 
-        # 执行动作
-        if control_signal > 0:
-            # 需要向右 (按 D)
+        # --- 纯非阻塞高频按键控制 ---
+        # 动态阈值：
+        # 如果游标在安全区内且目标没有高速移动，我们提高触发阈值，释放按键让游标自然滑动，避免左右鬼畜抽搐
+        # 如果游标偏离或者目标正在高速逃离，我们降低阈值，要求立即按键追赶
+        is_safe = (abs_error <= safe_zone) and (abs(target_velocity) < 80)
+        threshold = 15 if is_safe else 5
+
+        # 直接根据总信号方向进行按键映射，废弃阻塞线程的 key_tap(sleep)
+        if total_signal > threshold:
+            # 信号强力向右，需要按 D (同时松开 A 防止冲突)
             self.ctrl.key_up('A')
-            if abs_signal > t_hold_signal:
-                self.ctrl.key_down('D')
-            else:
-                self.ctrl.key_tap('D', duration=tap_duration)
-        elif control_signal < 0:
-            # 需要向左 (按 A)
+            self.ctrl.key_down('D')
+        elif total_signal < -threshold:
+            # 信号强力向左，需要按 A (同时松开 D 防止冲突)
             self.ctrl.key_up('D')
-            if abs_signal > t_hold_signal:
-                self.ctrl.key_down('A')
-            else:
-                self.ctrl.key_tap('A', duration=tap_duration)
+            self.ctrl.key_down('A')
+        else:
+            # 信号较小，处于完美跟随状态或需要刹车滑行，释放按键
+            self.ctrl.release_all()
 
     def _handle_result(self, rect):
         self._log("[结算] 正在检测钓鱼结果...")

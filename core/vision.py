@@ -129,6 +129,12 @@ class VisionCore:
         upper_green = np.array([90, 255, 255])
         target_mask = cv2.inRange(hsv, lower_green, upper_green)
         
+        # 增强形态学处理：绿条可能有半透明或者被游标遮挡，导致断裂
+        # 使用闭运算连接断裂的绿条，确保提取的中心更稳定
+        kernel = np.ones((3, 3), np.uint8)
+        target_mask = cv2.morphologyEx(target_mask, cv2.MORPH_CLOSE, kernel)
+        cursor_mask = cv2.morphologyEx(cursor_mask, cv2.MORPH_CLOSE, kernel)
+        
         # 对于绿条，不进行极其严格的形态学限制，因为它可能因为半透明被截断
         target_info = self._get_center_x(target_mask, is_vertical=False, strict_shape=False, return_width=True)
         cursor_info = self._get_center_x(cursor_mask, is_vertical=True, strict_shape=True, return_width=True)
