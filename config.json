@@ -1,6 +1,11 @@
 {
-    "hotkey_start": "alt+9",
-    "hotkey_stop": "alt+0",
     "hold_threshold": 15.0,
-    "deadzone_threshold": 5.0
+    "deadzone_threshold": 5.0,
+    "fishing_timeout": 180,
+    "cast_animation_delay": 2,
+    "settlement_close_delay": 2,
+    "bar_missing_timeout": 2,
+    "log_line_limit": 320,
+    "auto_switch_to_log": true,
+    "debug_mode": true
 }

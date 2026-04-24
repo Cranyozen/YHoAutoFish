@@ -1,8 +1,29 @@
 import json
 import os
 import random
+import re
+import tempfile
+import threading
 import time
 from collections import defaultdict
+from datetime import datetime, timedelta
+from difflib import SequenceMatcher
+
+_RECORD_FILE_LOCK = threading.RLock()
+OCR_CONFUSABLE_CHARS = str.maketrans({
+    "賽": "紫",
+    "赛": "紫",
+    "慈": "斑",
+    "班": "斑",
+    "部": "斑",
+    "幔": "鳗",
+    "鳄": "鲷",
+    "勰": "鲷",
+    "魚": "鱼",
+    "魯": "鱼",
+    "鲁": "鱼",
+    "食": "鱼",
+})
 
 
 class RecordManager:
@@ -23,8 +44,10 @@ class RecordManager:
             "encyclopedia": {},
             "history": [],
         }
+        self._load_failed = False
         self.load_records()
-        self._sync_encyclopedia_images()
+        if not self._load_failed:
+            self._sync_encyclopedia_images()
 
     def _touch_cache(self):
         self._cache_version += 1
@@ -34,12 +57,23 @@ class RecordManager:
         if not os.path.exists(self.record_file):
             return
 
-        try:
-            with open(self.record_file, "r", encoding="utf-8") as file:
-                data = json.load(file)
-        except Exception as exc:
-            print(f"Failed to load records: {exc}")
-            return
+        data = None
+        for attempt in range(3):
+            try:
+                with _RECORD_FILE_LOCK:
+                    with open(self.record_file, "r", encoding="utf-8") as file:
+                        data = json.load(file)
+                break
+            except json.JSONDecodeError as exc:
+                if attempt == 2:
+                    self._load_failed = True
+                    print(f"Failed to load records: {exc}")
+                    return
+                time.sleep(0.08)
+            except Exception as exc:
+                self._load_failed = True
+                print(f"Failed to load records: {exc}")
+                return
 
         self.records["stats"].update(data.get("stats", {}))
         self.records["history"] = data.get("history", [])
@@ -48,8 +82,19 @@ class RecordManager:
 
     def save_records(self):
         try:
-            with open(self.record_file, "w", encoding="utf-8") as file:
-                json.dump(self.records, file, ensure_ascii=False, indent=4)
+            record_dir = os.path.dirname(os.path.abspath(self.record_file)) or "."
+            with _RECORD_FILE_LOCK:
+                fd, temp_path = tempfile.mkstemp(prefix=".records.", suffix=".json", dir=record_dir, text=True)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as file:
+                        json.dump(self.records, file, ensure_ascii=False, indent=4)
+                    os.replace(temp_path, self.record_file)
+                except Exception:
+                    try:
+                        os.remove(temp_path)
+                    except OSError:
+                        pass
+                    raise
         except Exception as exc:
             print(f"Failed to save records: {exc}")
 
@@ -79,6 +124,155 @@ class RecordManager:
                 if item:
                     candidates.add(item)
         return candidates
+
+    def _normalize_name_text(self, text):
+        text = (text or "").strip()
+        if not text:
+            return ""
+        text = re.sub(r"\s+", "", text)
+        text = text.replace("·", "").replace("•", "")
+        text = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", text)
+        text = text.translate(OCR_CONFUSABLE_CHARS)
+        return text
+
+    def get_fish_name_alphabet(self):
+        chars = set()
+        for name, data in self.records.get("encyclopedia", {}).items():
+            for candidate in self._canonical_name_candidates(name, data.get("image_path", "")):
+                chars.update(self._normalize_name_text(candidate))
+        return "".join(sorted(chars))
+
+    def _levenshtein_distance(self, left, right):
+        if left == right:
+            return 0
+        if not left:
+            return len(right)
+        if not right:
+            return len(left)
+
+        previous = list(range(len(right) + 1))
+        for i, left_char in enumerate(left, start=1):
+            current = [i]
+            for j, right_char in enumerate(right, start=1):
+                cost = 0 if left_char == right_char else 1
+                current.append(min(
+                    previous[j] + 1,
+                    current[j - 1] + 1,
+                    previous[j - 1] + cost,
+                ))
+            previous = current
+        return previous[-1]
+
+    def _lcs_length(self, left, right):
+        if not left or not right:
+            return 0
+        previous = [0] * (len(right) + 1)
+        for left_char in left:
+            current = [0]
+            for j, right_char in enumerate(right, start=1):
+                if left_char == right_char:
+                    current.append(previous[j - 1] + 1)
+                else:
+                    current.append(max(previous[j], current[j - 1]))
+            previous = current
+        return previous[-1]
+
+    def _fish_match_threshold(self, normalized):
+        if len(normalized) <= 2:
+            return 0.98
+        if len(normalized) == 3:
+            return 0.78
+        return 0.68
+
+    def rank_fish_name(self, raw_name, ocr_score=0.0, loose=False):
+        normalized = self._normalize_name_text(raw_name)
+        if not normalized:
+            return "", 0.0, 0.0
+
+        encyclopedia = self.records.get("encyclopedia", {})
+        best_name = raw_name.strip()
+        best_score = 0.0
+        second_score = 0.0
+        ocr_score = max(0.0, min(float(ocr_score or 0.0), 1.0))
+
+        for name, data in encyclopedia.items():
+            candidates = self._canonical_name_candidates(name, data.get("image_path", ""))
+            for candidate in candidates:
+                candidate_norm = self._normalize_name_text(candidate)
+                if not candidate_norm:
+                    continue
+
+                if normalized == candidate_norm:
+                    score = 1.12 + ocr_score * 0.08
+                else:
+                    max_len = max(len(normalized), len(candidate_norm))
+                    edit_distance = self._levenshtein_distance(normalized, candidate_norm)
+                    edit_score = 1.0 - (edit_distance / max_len)
+                    lcs_score = self._lcs_length(normalized, candidate_norm) / max_len
+                    lexical_score = SequenceMatcher(None, normalized, candidate_norm).ratio()
+                    score = edit_score * 0.50 + lcs_score * 0.28 + lexical_score * 0.14 + ocr_score * 0.08
+
+                    if len(normalized) >= 3 and (normalized in candidate_norm or candidate_norm in normalized):
+                        score = max(score, 0.90 - abs(len(normalized) - len(candidate_norm)) * 0.025)
+
+                    if loose and 2 <= len(normalized) == len(candidate_norm) <= 6:
+                        diff_count = sum(1 for left, right in zip(normalized, candidate_norm) if left != right)
+                        if diff_count == 1 and (len(normalized) > 2 or normalized[0] == candidate_norm[0]):
+                            score = max(score, 0.86 + ocr_score * 0.04)
+
+                if score > best_score:
+                    second_score = best_score
+                    best_score = score
+                    best_name = name
+                elif score > second_score:
+                    second_score = score
+
+        return best_name, best_score, second_score
+
+    def resolve_fish_name(self, raw_name, loose=False):
+        normalized = self._normalize_name_text(raw_name)
+        best_name, best_score, second_score = self.rank_fish_name(raw_name, 1.0 if loose else 0.5, loose)
+        if not best_name:
+            return ""
+        threshold = self._fish_match_threshold(normalized)
+        if best_score >= 1.0 or (best_score >= threshold and best_score - second_score >= 0.035):
+            return best_name
+        return raw_name.strip()
+
+    def resolve_fish_name_candidates(self, candidates):
+        grouped = {}
+
+        for raw_text, ocr_score in candidates:
+            normalized = self._normalize_name_text(raw_text)
+            if not normalized:
+                continue
+            name, score, local_second = self.rank_fish_name(raw_text, ocr_score, loose=True)
+            if not name:
+                continue
+            if score < 1.0 and score - local_second < 0.035:
+                continue
+            current = grouped.setdefault(name, {"score": 0.0, "raw": raw_text, "norm": normalized, "hits": 0})
+            current["hits"] += 1
+            if score > current["score"]:
+                current["score"] = score
+                current["raw"] = raw_text
+                current["norm"] = normalized
+
+        if not grouped:
+            return "", 0.0, ""
+
+        ranked = []
+        for name, data in grouped.items():
+            score = data["score"] + min(0.06, max(0, data["hits"] - 1) * 0.012)
+            ranked.append((score, name, data["raw"], data["norm"]))
+        ranked.sort(reverse=True)
+
+        best_score, best_name, best_raw, best_norm = ranked[0]
+        second_score = ranked[1][0] if len(ranked) > 1 else 0.0
+        threshold = self._fish_match_threshold(best_norm)
+        if best_score >= 1.0 or (best_score >= threshold and best_score - second_score >= 0.035):
+            return best_name, best_score, best_raw
+        return "", best_score, best_raw
 
     def _scan_resource_catalog(self):
         catalog = {}
@@ -147,6 +341,9 @@ class RecordManager:
                 fixed["rarity"] = remapped[matched_name]["rarity"]
                 fixed["image_path"] = remapped[matched_name]["image_path"]
             repaired_history.append(fixed)
+
+        if self.records.get("encyclopedia", {}) == remapped and self.records.get("history", []) == repaired_history:
+            return
 
         self.records["encyclopedia"] = remapped
         self.records["history"] = repaired_history
@@ -244,6 +441,24 @@ class RecordManager:
                     canonical_name = name
                     break
 
+        is_unknown_entry = canonical_name in {"", "未知鱼类", "未识别鱼类"}
+        if is_unknown_entry:
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            self.records["history"].append(
+                {
+                    "time": timestamp,
+                    "fish_name": canonical_name or "未知鱼类",
+                    "weight": int(weight_g or 0),
+                    "rarity": rarity or "未知稀有度",
+                    "image_path": "",
+                }
+            )
+            if len(self.records["history"]) > 1000:
+                self.records["history"] = self.records["history"][-1000:]
+            self._touch_cache()
+            self.save_records()
+            return
+
         if canonical_name not in self.records["encyclopedia"]:
             self.records["encyclopedia"][canonical_name] = {
                 "caught_count": 0,
@@ -298,17 +513,48 @@ class RecordManager:
             grouped[data.get("rarity", "未知稀有度")][name] = data
         return dict(grouped)
 
-    def query_history(self, keyword="", rarity="全部稀有度"):
+    def query_history(self, keyword="", rarity="全部稀有度", period="全部时间", weight_bucket="全部重量"):
         keyword = (keyword or "").strip().lower()
-        cache_key = (self._cache_version, keyword, rarity)
+        period = period or "全部时间"
+        weight_bucket = weight_bucket or "全部重量"
+        cache_key = (self._cache_version, keyword, rarity, period, weight_bucket)
         if cache_key in self._query_cache:
             return list(self._query_cache[cache_key])
+
+        now = datetime.now()
+        start_date = None
+        if period == "今日":
+            start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == "最近24小时":
+            start_date = now - timedelta(hours=24)
+        elif period == "最近7天":
+            start_date = now - timedelta(days=7)
+        elif period == "最近30天":
+            start_date = now - timedelta(days=30)
 
         results = []
         for record in self.records["history"]:
             if keyword and keyword not in record.get("fish_name", "").lower():
                 continue
             if rarity and rarity != "全部稀有度" and record.get("rarity") != rarity:
+                continue
+            if start_date is not None:
+                try:
+                    record_time = datetime.strptime(record.get("time", "")[:19], "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    continue
+                if record_time < start_date:
+                    continue
+            weight = int(record.get("weight", 0) or 0)
+            if weight_bucket == "小于100g" and weight >= 100:
+                continue
+            if weight_bucket == "100-999g" and not (100 <= weight <= 999):
+                continue
+            if weight_bucket == "1000g以上" and weight < 1000:
+                continue
+            if weight_bucket == "1000-9999g" and not (1000 <= weight <= 9999):
+                continue
+            if weight_bucket == "10000g以上" and weight < 10000:
                 continue
             results.append(record)
         self._query_cache[cache_key] = list(results)

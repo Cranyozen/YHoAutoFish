@@ -192,7 +192,8 @@ def primary_button_stylesheet():
         border: none;
         outline: none;
         border-radius: 18px;
-        padding: 12px 18px;
+        min-height: 44px;
+        padding: 0 18px;
         font-size: 14px;
         font-weight: 900;
     }}
@@ -217,7 +218,8 @@ def secondary_button_stylesheet():
         border: 1px solid rgba(111, 145, 182, 0.18);
         outline: none;
         border-radius: 18px;
-        padding: 11px 18px;
+        min-height: 40px;
+        padding: 0 18px;
         font-size: 13px;
         font-weight: 700;
     }}
@@ -236,7 +238,7 @@ def secondary_button_stylesheet():
 
 def table_stylesheet():
     return f"""
-    QTableWidget {{
+    QTableWidget, QTableView {{
         background-color: transparent;
         color: {APP_COLORS['text']};
         border: none;

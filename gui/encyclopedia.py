@@ -49,11 +49,12 @@ class FishCard(QFrame):
         super().__init__(parent)
         self.name = name
         self.data = data
-        self.caught_count = 0
+        self.caught_count = int(data.get("caught_count", 0) or 0)
         self.show_all_mode = False
         self.pixmap = QPixmap()
         self.gray_pixmap = QPixmap()
         self.hover_value = 0.0
+        self._last_state_signature = None
 
         self.setObjectName("fishCard")
         self.setFixedSize(292, 356)
@@ -192,6 +193,17 @@ class FishCard(QFrame):
 
         self.refresh_card()
 
+    def _make_state_signature(self, show_all_mode, fish_data):
+        return (
+            bool(show_all_mode),
+            int(fish_data.get("caught_count", 0) or 0),
+            int(fish_data.get("max_weight", 0) or 0),
+            fish_data.get("rarity", ""),
+            fish_data.get("image_path", ""),
+            fish_data.get("first_caught_at", ""),
+            fish_data.get("last_caught_at", ""),
+        )
+
     def enterEvent(self, event):
         self._animate_hover(1.0)
         super().enterEvent(event)
@@ -233,10 +245,15 @@ class FishCard(QFrame):
             self.image_label.setPixmap(self.gray_pixmap)
 
     def update_state(self, show_all_mode, fish_data):
+        signature = self._make_state_signature(show_all_mode, fish_data)
+        if signature == self._last_state_signature:
+            return False
+
         self.show_all_mode = show_all_mode
         self.data = fish_data
         self.caught_count = int(fish_data.get("caught_count", 0))
         self.refresh_card()
+        return True
 
     def _apply_styles(self):
         rarity = self.data.get("rarity", "未知稀有度")
@@ -340,6 +357,7 @@ class FishCard(QFrame):
         self._apply_pixmap()
 
     def refresh_card(self):
+        self._last_state_signature = self._make_state_signature(self.show_all_mode, self.data)
         rarity = self.data.get("rarity", "未知稀有度")
         meta = RARITY_META.get(rarity, RARITY_META["未知稀有度"])
         is_unlocked = self.show_all_mode or self.caught_count > 0
@@ -378,6 +396,8 @@ class EncyclopediaWidget(QWidget):
         self.card_order = []
         self.show_all_mode = False
         self.visible_names = []
+        self._last_layout_names = ()
+        self._last_layout_columns = 0
 
         self.refresh_timer = QTimer(self)
         self.refresh_timer.setSingleShot(True)
@@ -555,14 +575,20 @@ class EncyclopediaWidget(QWidget):
         self.relayout_cards()
 
     def relayout_cards(self):
+        width = max(1, self.scroll_area.viewport().width())
+        columns = max(1, (width + self.GRID_GAP) // (self.CARD_WIDTH + self.GRID_GAP))
+        layout_names = tuple(self.visible_names)
+        if layout_names == self._last_layout_names and columns == self._last_layout_columns:
+            return
+
+        self._last_layout_names = layout_names
+        self._last_layout_columns = columns
         self.scroll_content.setUpdatesEnabled(False)
         while self.grid_layout.count():
             item = self.grid_layout.takeAt(0)
             if item.widget():
                 item.widget().hide()
 
-        width = max(1, self.scroll_area.viewport().width())
-        columns = max(1, (width + self.GRID_GAP) // (self.CARD_WIDTH + self.GRID_GAP))
         for index, name in enumerate(self.visible_names):
             card = self.cards[name]
             row = index // columns

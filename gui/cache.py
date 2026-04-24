@@ -1,11 +1,12 @@
 import os
 
-from PySide6.QtCore import QObject, Qt
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtCore import QObject, QSize, Qt
+from PySide6.QtGui import QImage, QImageReader, QPixmap
 
 
 class ImageCache(QObject):
     _instance = None
+    TARGET_SIZE = 128
 
     @classmethod
     def get_instance(cls):
@@ -25,12 +26,20 @@ class ImageCache(QObject):
             self.vram_cache[name] = QPixmap()
             return self.vram_cache[name]
 
-        image = QImage(path)
+        reader = QImageReader(path)
+        image_size = reader.size()
+        if image_size.isValid():
+            image_size.scale(QSize(self.TARGET_SIZE, self.TARGET_SIZE), Qt.KeepAspectRatio)
+            reader.setScaledSize(image_size)
+        image = reader.read()
+        if image.isNull():
+            image = QImage(path)
         if image.isNull():
             self.vram_cache[name] = QPixmap()
             return self.vram_cache[name]
 
-        image = image.scaled(220, 220, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        if image.width() > self.TARGET_SIZE or image.height() > self.TARGET_SIZE:
+            image = image.scaled(self.TARGET_SIZE, self.TARGET_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         pixmap = QPixmap.fromImage(image)
         self.vram_cache[name] = pixmap
         return pixmap

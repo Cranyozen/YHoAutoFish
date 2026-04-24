@@ -1,8 +1,9 @@
 from collections import defaultdict
 
-from PySide6.QtCore import QPointF, QRectF, QSignalBlocker, QTimer, Qt
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPointF, QRectF, QSignalBlocker, QTimer, Qt
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
     QFrame,
     QGridLayout,
@@ -12,8 +13,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSizePolicy,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QVBoxLayout,
     QWidget,
 )
@@ -94,17 +94,27 @@ class InsightChart(QWidget):
         self.mode = "bar"
         self.distribution = {}
         self.trend_points = []
+        self.trend_granularity = "day"
         self.total_count = 0
         self.setMinimumHeight(300)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
     def set_mode(self, mode):
+        if self.mode == mode:
+            return
         self.mode = mode
         self.update()
 
-    def set_data(self, distribution, trend_points):
+    def set_data(self, distribution, trend_points, trend_granularity="day"):
+        if (
+            self.distribution == (distribution or {})
+            and self.trend_points == (trend_points or [])
+            and self.trend_granularity == trend_granularity
+        ):
+            return
         self.distribution = distribution or {}
         self.trend_points = trend_points or []
+        self.trend_granularity = trend_granularity
         self.total_count = sum(self.distribution.values())
         self.update()
 
@@ -207,72 +217,143 @@ class InsightChart(QWidget):
             return
 
         total = sum(count for _, count, _ in items)
-        size = min(rect.width() * 0.46, rect.height() * 0.82)
-        pie_rect = QRectF(rect.left() + 20, rect.center().y() - size / 2, size, size)
+        size = min(rect.width() * 0.40, rect.height() * 0.72)
+        pie_rect = QRectF(rect.left() + 24, rect.center().y() - size / 2 + 4, size, size)
+        ring_width = max(16, min(21, int(size * 0.12)))
 
-        painter.setPen(QPen(QColor(255, 255, 255, 10), 16))
+        aura_rect = pie_rect.adjusted(-18, -18, 18, 18)
+        aura_gradient = QLinearGradient(aura_rect.topLeft(), aura_rect.bottomRight())
+        aura_gradient.setColorAt(0.0, QColor(29, 208, 214, 34))
+        aura_gradient.setColorAt(1.0, QColor(10, 18, 29, 0))
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(aura_gradient)
+        painter.drawEllipse(aura_rect)
+
+        painter.setPen(QPen(QColor(255, 255, 255, 10), ring_width))
         painter.setBrush(Qt.NoBrush)
         painter.drawEllipse(pie_rect)
 
         start_angle = 90 * 16
         for rarity, count, _ in items:
             color = QColor(RARITY_META[rarity]["color"])
-            pen = QPen(color, 18)
+            glow = QColor(RARITY_META[rarity]["glow"])
+            span = -int((count / total) * 360 * 16)
+
+            glow_pen = QPen(glow, ring_width + 8)
+            glow_pen.setCapStyle(Qt.RoundCap)
+            painter.setOpacity(0.20)
+            painter.setPen(glow_pen)
+            painter.drawArc(pie_rect, start_angle, span)
+
+            painter.setOpacity(1.0)
+            pen = QPen(color, ring_width)
             pen.setCapStyle(Qt.RoundCap)
             painter.setPen(pen)
-            span = -int((count / total) * 360 * 16)
             painter.drawArc(pie_rect, start_angle, span)
             start_angle += span
 
-        inner_rect = pie_rect.adjusted(44, 44, -44, -44)
+        inner_margin = max(30, int(size * 0.24))
+        inner_rect = pie_rect.adjusted(inner_margin, inner_margin, -inner_margin, -inner_margin)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(10, 18, 29, 235))
+        inner_gradient = QLinearGradient(inner_rect.topLeft(), inner_rect.bottomRight())
+        inner_gradient.setColorAt(0.0, QColor(25, 42, 64, 235))
+        inner_gradient.setColorAt(1.0, QColor(7, 15, 26, 245))
+        painter.setBrush(inner_gradient)
         painter.drawEllipse(inner_rect)
 
-        center_rect = inner_rect.adjusted(10, 10, -10, -10)
-        label_rect = QRectF(center_rect.left(), center_rect.top() + 8, center_rect.width(), 18)
-        value_rect = QRectF(center_rect.left(), center_rect.top() + 28, center_rect.width(), 32)
+        center_rect = inner_rect.adjusted(-8, 0, 8, 0)
+        label_rect = QRectF(center_rect.left(), center_rect.center().y() - 22, center_rect.width(), 18)
+        value_rect = QRectF(center_rect.left(), center_rect.center().y() - 5, center_rect.width(), 34)
 
         painter.setPen(QColor(APP_COLORS["text_dim"]))
-        painter.setFont(QFont("Microsoft YaHei UI", 9))
-        painter.drawText(label_rect, Qt.AlignCenter, "累计捕获")
+        painter.setFont(QFont("Microsoft YaHei UI", 8, QFont.Bold))
+        painter.drawText(label_rect, Qt.AlignCenter, "累计")
         painter.setPen(QColor(APP_COLORS["text"]))
-        painter.setFont(QFont("Microsoft YaHei UI", 18, QFont.Bold))
+        value_font_size = 20 if total < 1000 else 17
+        painter.setFont(QFont("Microsoft YaHei UI", value_font_size, QFont.Bold))
         painter.drawText(value_rect, Qt.AlignCenter, str(total))
 
-        legend_x = pie_rect.right() + 34
+        legend_x = pie_rect.right() + 30
+        legend_rect = QRectF(legend_x - 8, rect.top() + 14, rect.right() - legend_x - 4, rect.height() - 28)
+        legend_path = QPainterPath()
+        legend_path.addRoundedRect(legend_rect, 22, 22)
+        legend_bg = QLinearGradient(legend_rect.topLeft(), legend_rect.bottomRight())
+        legend_bg.setColorAt(0.0, QColor(13, 28, 44, 228))
+        legend_bg.setColorAt(1.0, QColor(7, 15, 26, 246))
+        painter.setPen(Qt.NoPen)
+        painter.fillPath(legend_path, legend_bg)
+        painter.setPen(QPen(QColor(99, 228, 228, 22), 1))
+        painter.drawPath(legend_path)
+
         for index, (rarity, count, _) in enumerate(items):
-            top = rect.top() + 36 + index * 52
-            badge_rect = QRectF(legend_x, top, rect.right() - legend_x - 12, 40)
+            percent = int(count / total * 100)
+            meta = RARITY_META[rarity]
+            top = legend_rect.top() + 10 + index * 45
+            badge_rect = QRectF(legend_x + 2, top, legend_rect.width() - 14, 37)
             badge_path = QPainterPath()
             badge_path.addRoundedRect(badge_rect, 14, 14)
-            painter.fillPath(badge_path, QColor(255, 255, 255, 8))
+            badge_bg = QLinearGradient(badge_rect.topLeft(), badge_rect.topRight())
+            badge_bg.setColorAt(0.0, QColor(255, 255, 255, 9))
+            badge_bg.setColorAt(1.0, QColor(255, 255, 255, 3))
+            painter.fillPath(badge_path, badge_bg)
+            painter.setPen(QPen(QColor(255, 255, 255, 7), 1))
+            painter.drawPath(badge_path)
 
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(RARITY_META[rarity]["color"]))
-            painter.drawEllipse(QRectF(legend_x + 14, top + 11, 18, 18))
+            color = QColor(meta["color"])
+            halo = QColor(meta["color"])
+            halo.setAlpha(40)
+            painter.setBrush(halo)
+            painter.drawEllipse(QRectF(badge_rect.left() + 10, top + 8, 20, 20))
+            painter.setBrush(color)
+            painter.drawEllipse(QRectF(badge_rect.left() + 14, top + 12, 12, 12))
 
             painter.setPen(QColor(APP_COLORS["text"]))
             painter.setFont(QFont("Microsoft YaHei UI", 10, QFont.Bold))
             painter.drawText(
-                QRectF(legend_x + 42, top + 4, 110, 16),
+                QRectF(badge_rect.left() + 38, top + 4, 52, 15),
                 Qt.AlignLeft | Qt.AlignVCenter,
-                RARITY_META[rarity]["label"],
+                meta["label"],
             )
             painter.setPen(QColor(APP_COLORS["text_dim"]))
+            painter.setFont(QFont("Microsoft YaHei UI", 8, QFont.Bold))
+            painter.drawText(
+                QRectF(badge_rect.right() - 42, top + 4, 34, 15),
+                Qt.AlignRight | Qt.AlignVCenter,
+                f"{percent}%",
+            )
+            painter.setPen(QColor(APP_COLORS["text_soft"]))
             painter.setFont(QFont("Microsoft YaHei UI", 9))
             painter.drawText(
-                QRectF(legend_x + 42, top + 19, 140, 14),
+                QRectF(badge_rect.left() + 38, top + 20, 72, 13),
                 Qt.AlignLeft | Qt.AlignVCenter,
-                f"{count} 条 · {int(count / total * 100)}%",
+                f"{count} 条",
             )
+
+            track_width = max(18, badge_rect.width() - 122)
+            track_rect = QRectF(badge_rect.right() - track_width - 10, top + 25, track_width, 4)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(255, 255, 255, 18))
+            painter.drawRoundedRect(track_rect, 2, 2)
+            fill_rect = QRectF(track_rect.left(), track_rect.top(), max(2, track_rect.width() * percent / 100), track_rect.height())
+            fill_color = QColor(meta["color"])
+            fill_color.setAlpha(170)
+            painter.setBrush(fill_color)
+            painter.drawRoundedRect(fill_rect, 2, 2)
 
     def _draw_line(self, painter, rect):
         if not self.trend_points:
             self._draw_empty(painter, rect, "暂无趋势数据")
             return
 
-        plot_rect = rect.adjusted(24, 26, -22, -36)
+        header_rect = QRectF(rect.left() + 16, rect.top() + 12, rect.width() - 32, 24)
+        title = "按小时捕获趋势" if self.trend_granularity == "hour" else "按日期捕获趋势"
+        painter.setPen(QColor(APP_COLORS["text_dim"]))
+        painter.setFont(QFont("Microsoft YaHei UI", 10, QFont.Bold))
+        painter.drawText(header_rect, Qt.AlignLeft | Qt.AlignVCenter, title)
+        painter.drawText(header_rect, Qt.AlignRight | Qt.AlignVCenter, f"峰值 {max(value for _, value in self.trend_points)} 条")
+
+        plot_rect = rect.adjusted(24, 50, -22, -38)
         painter.setPen(QPen(QColor(255, 255, 255, 14), 1))
         for index in range(5):
             y = plot_rect.top() + index * plot_rect.height() / 4
@@ -310,24 +391,92 @@ class InsightChart(QWidget):
         painter.setPen(QPen(QColor(APP_COLORS["accent"]), 3))
         painter.drawPath(path)
 
-        for point, label, value in points:
+        label_step = max(1, len(points) // 8)
+        for index, (point, label, value) in enumerate(points):
             painter.setPen(Qt.NoPen)
             painter.setBrush(QColor(APP_COLORS["accent"]))
             painter.drawEllipse(point, 5, 5)
             painter.setBrush(QColor(255, 255, 255, 70))
             painter.drawEllipse(point, 9, 9)
 
-            painter.setPen(QColor(APP_COLORS["text"]))
-            painter.setFont(QFont("Microsoft YaHei UI", 9, QFont.Bold))
-            painter.drawText(QRectF(point.x() - 18, point.y() - 26, 36, 16), Qt.AlignCenter, str(value))
+            if index % label_step == 0 or index == len(points) - 1:
+                painter.setPen(QColor(APP_COLORS["text"]))
+                painter.setFont(QFont("Microsoft YaHei UI", 9, QFont.Bold))
+                painter.drawText(QRectF(point.x() - 18, point.y() - 26, 36, 16), Qt.AlignCenter, str(value))
 
-            painter.setPen(QColor(APP_COLORS["text_dim"]))
-            painter.setFont(QFont("Microsoft YaHei UI", 9))
-            painter.drawText(
-                QRectF(point.x() - 40, plot_rect.bottom() + 10, 80, 16),
-                Qt.AlignCenter,
-                label[5:] if len(label) >= 10 else label,
+                painter.setPen(QColor(APP_COLORS["text_dim"]))
+                painter.setFont(QFont("Microsoft YaHei UI", 9))
+                if self.trend_granularity == "hour":
+                    label_text = label[11:16] if len(label) >= 16 else label
+                else:
+                    label_text = label[5:] if len(label) >= 10 else label
+                painter.drawText(
+                    QRectF(point.x() - 40, plot_rect.bottom() + 10, 80, 16),
+                    Qt.AlignCenter,
+                    label_text,
+                )
+
+
+class FishingRecordTableModel(QAbstractTableModel):
+    HEADERS = ["时间", "鱼种", "稀有度", "重量"]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._records = []
+        self._signature = None
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self._records)
+
+    def columnCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.HEADERS)
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if role == Qt.DisplayRole and orientation == Qt.Horizontal and 0 <= section < len(self.HEADERS):
+            return self.HEADERS[section]
+        return None
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid():
+            return None
+
+        record = self._records[index.row()]
+        column = index.column()
+        rarity = record.get("rarity", "未知稀有度")
+        rarity_meta = RARITY_META.get(rarity, {"label": "未知", "color": APP_COLORS["text"]})
+
+        if role == Qt.DisplayRole:
+            if column == 0:
+                return record.get("time", "")
+            if column == 1:
+                return record.get("fish_name", "未知鱼种")
+            if column == 2:
+                return rarity_meta["label"]
+            if column == 3:
+                return f"{int(record.get('weight', 0) or 0)} g"
+        if role == Qt.TextAlignmentRole:
+            return (Qt.AlignLeft | Qt.AlignVCenter) if column == 0 else (Qt.AlignCenter | Qt.AlignVCenter)
+        if role == Qt.ForegroundRole:
+            return QColor(rarity_meta["color"] if column == 2 else APP_COLORS["text"])
+        return None
+
+    def set_records(self, records):
+        records = list(records or [])
+        signature = tuple(
+            (
+                record.get("time", ""),
+                record.get("fish_name", ""),
+                record.get("rarity", ""),
+                int(record.get("weight", 0) or 0),
             )
+            for record in records
+        )
+        if signature == self._signature:
+            return
+        self.beginResetModel()
+        self._records = records
+        self._signature = signature
+        self.endResetModel()
 
 
 class FishingRecordWidget(QWidget):
@@ -335,12 +484,12 @@ class FishingRecordWidget(QWidget):
         super().__init__()
         self.record_mgr = record_mgr
         self.current_chart_mode = "bar"
+        self._last_refresh_signature = None
         self.refresh_timer = QTimer(self)
         self.refresh_timer.setSingleShot(True)
         self.refresh_timer.setInterval(100)
         self.refresh_timer.timeout.connect(self.refresh_data)
         self.init_ui()
-        self.refresh_data()
 
     def init_ui(self):
         self.setStyleSheet(panel_stylesheet())
@@ -415,12 +564,28 @@ class FishingRecordWidget(QWidget):
         self.rarity_combo = QComboBox()
         self.rarity_combo.addItems(["全部稀有度"] + RARITY_ORDER)
         self.rarity_combo.setStyleSheet(combo_stylesheet())
+        self.rarity_combo.setFixedWidth(146)
         self.rarity_combo.currentIndexChanged.connect(self.refresh_data)
         row.addWidget(self.rarity_combo)
+
+        self.time_combo = QComboBox()
+        self.time_combo.addItems(["全部时间", "今日", "最近24小时", "最近7天", "最近30天"])
+        self.time_combo.setStyleSheet(combo_stylesheet())
+        self.time_combo.setFixedWidth(136)
+        self.time_combo.currentIndexChanged.connect(self.refresh_data)
+        row.addWidget(self.time_combo)
+
+        self.weight_combo = QComboBox()
+        self.weight_combo.addItems(["全部重量", "小于100g", "100-999g", "1000-9999g", "10000g以上"])
+        self.weight_combo.setStyleSheet(combo_stylesheet())
+        self.weight_combo.setFixedWidth(138)
+        self.weight_combo.currentIndexChanged.connect(self.refresh_data)
+        row.addWidget(self.weight_combo)
 
         self.sort_combo = QComboBox()
         self.sort_combo.addItems(["按时间倒序", "按重量倒序", "按重量正序"])
         self.sort_combo.setStyleSheet(combo_stylesheet())
+        self.sort_combo.setFixedWidth(132)
         self.sort_combo.currentIndexChanged.connect(self.refresh_data)
         row.addWidget(self.sort_combo)
 
@@ -446,6 +611,14 @@ class FishingRecordWidget(QWidget):
         chart_title.setProperty("role", "section")
         chart_header.addWidget(chart_title)
         chart_header.addStretch()
+
+        self.trend_combo = QComboBox()
+        self.trend_combo.addItems(["按日趋势", "按小时趋势"])
+        self.trend_combo.setStyleSheet(combo_stylesheet())
+        self.trend_combo.setFixedWidth(112)
+        self.trend_combo.setVisible(False)
+        self.trend_combo.currentIndexChanged.connect(self.refresh_data)
+        chart_header.addWidget(self.trend_combo)
 
         self.chart_buttons = []
         for text, mode in [("柱状图", "bar"), ("扇形图", "pie"), ("折线图", "line")]:
@@ -503,21 +676,25 @@ class FishingRecordWidget(QWidget):
         record_body_layout.setContentsMargins(12, 12, 12, 12)
         record_body_layout.setSpacing(8)
 
-        self.record_table = QTableWidget(0, 4)
-        self.record_table.setHorizontalHeaderLabels(["时间", "鱼种", "稀有度", "重量"])
+        self.record_model = FishingRecordTableModel(self)
+        self.record_table = QTableView()
+        self.record_table.setModel(self.record_model)
         self.record_table.setAlternatingRowColors(True)
-        self.record_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.record_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.record_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.record_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.record_table.setFocusPolicy(Qt.NoFocus)
         self.record_table.setShowGrid(False)
         self.record_table.setWordWrap(False)
         self.record_table.verticalHeader().setVisible(False)
         self.record_table.verticalHeader().setDefaultSectionSize(42)
         self.record_table.horizontalHeader().setStretchLastSection(True)
-        self.record_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.record_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
         self.record_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.record_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.record_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.record_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)
+        self.record_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
+        self.record_table.setColumnWidth(0, 154)
+        self.record_table.setColumnWidth(2, 92)
+        self.record_table.setColumnWidth(3, 104)
         self.record_table.setStyleSheet(table_stylesheet())
         record_body_layout.addWidget(self.record_table, 1)
 
@@ -543,46 +720,27 @@ class FishingRecordWidget(QWidget):
         self.current_chart_mode = sender.mode
         for button in self.chart_buttons:
             button.setChecked(button is sender)
+        self.trend_combo.setVisible(self.current_chart_mode == "line")
         self.chart.set_mode(self.current_chart_mode)
 
     def _reset_filters(self):
         blockers = [
             QSignalBlocker(self.search_edit),
             QSignalBlocker(self.rarity_combo),
+            QSignalBlocker(self.time_combo),
+            QSignalBlocker(self.weight_combo),
             QSignalBlocker(self.sort_combo),
         ]
         self.search_edit.clear()
         self.rarity_combo.setCurrentIndex(0)
+        self.time_combo.setCurrentIndex(0)
+        self.weight_combo.setCurrentIndex(0)
         self.sort_combo.setCurrentIndex(0)
         del blockers
         self.refresh_data()
 
     def _populate_table(self, history):
-        self.record_table.setUpdatesEnabled(False)
-        self.record_table.clearContents()
-        self.record_table.setRowCount(len(history))
-
-        for row, record in enumerate(history):
-            rarity = record.get("rarity", "未知稀有度")
-            rarity_meta = RARITY_META.get(rarity, {"label": "未知", "color": APP_COLORS["text"]})
-            values = [
-                record.get("time", ""),
-                record.get("fish_name", "未知鱼种"),
-                rarity_meta["label"],
-                f"{record.get('weight', 0)} g",
-            ]
-            for col, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                if col == 0:
-                    item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-                else:
-                    item.setTextAlignment(Qt.AlignCenter)
-                item.setForeground(
-                    QColor(rarity_meta["color"] if col == 2 else APP_COLORS["text"])
-                )
-                self.record_table.setItem(row, col, item)
-
-        self.record_table.setUpdatesEnabled(True)
+        self.record_model.set_records(history)
 
     def refresh_data(self):
         stats = self.record_mgr.get_stats()
@@ -590,9 +748,30 @@ class FishingRecordWidget(QWidget):
 
         keyword = self.search_edit.text().strip()
         rarity = self.rarity_combo.currentText()
-        history = self.record_mgr.query_history(keyword=keyword, rarity=rarity)
-
+        period = self.time_combo.currentText()
+        weight_bucket = self.weight_combo.currentText()
         sort_mode = self.sort_combo.currentText()
+        trend_granularity = "hour" if self.trend_combo.currentIndex() == 1 else "day"
+        refresh_signature = (
+            getattr(self.record_mgr, "_cache_version", 0),
+            keyword,
+            rarity,
+            period,
+            weight_bucket,
+            sort_mode,
+            trend_granularity,
+        )
+        if refresh_signature == self._last_refresh_signature:
+            return
+        self._last_refresh_signature = refresh_signature
+
+        history = self.record_mgr.query_history(
+            keyword=keyword,
+            rarity=rarity,
+            period=period,
+            weight_bucket=weight_bucket,
+        )
+
         if sort_mode == "按重量倒序":
             history.sort(key=lambda item: item.get("weight", 0), reverse=True)
         elif sort_mode == "按重量正序":
@@ -617,11 +796,17 @@ class FishingRecordWidget(QWidget):
         distribution = self.record_mgr.get_rarity_distribution(history)
         trend_source = defaultdict(int)
         for record in history:
-            trend_source[record.get("time", "")[:10]] += 1
-        trend_points = [(day, trend_source[day]) for day in sorted(trend_source.keys())[-7:]]
+            record_time = record.get("time", "")
+            if trend_granularity == "hour":
+                key = f"{record_time[:13]}:00" if len(record_time) >= 13 else ""
+            else:
+                key = record_time[:10]
+            if key:
+                trend_source[key] += 1
+        limit = 24 if trend_granularity == "hour" else 14
+        trend_points = [(key, trend_source[key]) for key in sorted(trend_source.keys())[-limit:]]
 
-        self.chart.set_data(distribution, trend_points)
-        self.chart.set_mode(self.current_chart_mode)
+        self.chart.set_data(distribution, trend_points, trend_granularity)
 
         self._populate_table(history)
 

@@ -1,5 +1,4 @@
 import time
-import keyboard
 import pydirectinput  # 引入更成熟的底层模拟库
 
 class Controller:
@@ -50,7 +49,3 @@ class Controller:
         """释放所有记录在案的被按下的键 (安全保护)"""
         for key in list(self.pressed_keys):
             self.key_up(key)
-
-    def check_hotkey(self, hotkey_str):
-        """检测快捷键是否按下，如 'f9'"""
-        return keyboard.is_pressed(hotkey_str)
