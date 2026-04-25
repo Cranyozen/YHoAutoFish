@@ -2,7 +2,12 @@
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, copy_metadata
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+    copy_metadata,
+)
 
 
 ROOT = Path.cwd()
@@ -30,12 +35,28 @@ def safe_copy_metadata(package):
         return []
 
 
+def safe_collect_dynamic_libs(package):
+    try:
+        return collect_dynamic_libs(package)
+    except Exception:
+        return []
+
+
+def safe_collect_submodules(package):
+    try:
+        return collect_submodules(package)
+    except Exception:
+        return []
+
+
 datas = []
 datas += existing_data("assets", "assets")
 datas += existing_data("异环鱼类图鉴资源", "异环鱼类图鉴资源")
+datas += existing_data("ocr_models", "ocr_models")
 datas += existing_data("logo.jpg", ".")
 datas += existing_data("build_assets/logo.ico", ".")
 datas += existing_data("config.json", ".")
+binaries = []
 
 hiddenimports = [
     "cnocr",
@@ -59,12 +80,14 @@ hiddenimports = [
 for package in ("cnocr", "cnstd", "rapidocr", "onnxruntime"):
     datas += safe_collect_data_files(package)
     datas += safe_copy_metadata(package)
+    binaries += safe_collect_dynamic_libs(package)
+    hiddenimports += safe_collect_submodules(package)
 
 
 a = Analysis(
     ["main.py"],
     pathex=[str(ROOT)],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=sorted(set(hiddenimports)),
     hookspath=[],

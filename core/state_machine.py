@@ -5,6 +5,10 @@ import cv2
 import numpy as np
 import os
 import re
+import shutil
+import traceback
+from pathlib import Path
+from importlib import metadata
 from PIL import Image, ImageDraw, ImageFont
 
 from core.window_manager import WindowManager
@@ -16,6 +20,15 @@ from core.record_manager import RecordManager
 from core.paths import resource_path
 
 CnOcr = None
+
+OCR_MODEL_BUNDLE_DIR = "ocr_models"
+OCR_REQUIRED_MODELS = (
+    (
+        "cnocr",
+        ("2.3", "densenet_lite_136-gru"),
+        "cnocr-v2.3-densenet_lite_136-gru-epoch=004-ft-model.onnx",
+    ),
+)
 
 class StateMachine:
     STATE_IDLE = 0
@@ -37,6 +50,9 @@ class StateMachine:
         self.ocr = {}
         self.ocr_available = True
         self._ocr_import_checked = False
+        self._ocr_roots = None
+        self.last_ocr_init_error = ""
+        self.last_ocr_init_trace = ""
         self._fish_matcher_refs = None
         self._weight_digit_templates = None
         self._last_name_ocr_candidates = []
@@ -113,8 +129,117 @@ class StateMachine:
         if key == "fishing_timeout":
             self.fishing_timeout = value
 
+    def _default_ocr_root(self, package_name):
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return Path(appdata) / package_name
+        return Path.home() / f".{package_name}"
+
+    def _copy_tree_missing(self, source, target):
+        copied = 0
+        source = Path(source)
+        target = Path(target)
+        if not source.exists():
+            return copied
+        for src in source.rglob("*"):
+            if not src.is_file():
+                continue
+            rel = src.relative_to(source)
+            dst = target / rel
+            try:
+                if dst.exists() and dst.stat().st_size == src.stat().st_size:
+                    continue
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+                copied += 1
+            except OSError as exc:
+                self._log(f"[识别] OCR 模型文件复制失败: {dst}，原因: {exc}")
+                raise
+        return copied
+
+    def _prepare_ocr_runtime_roots(self):
+        """把随程序分发的 OCR 模型复制到 cnocr/cnstd 默认可写缓存目录。"""
+        if self._ocr_roots is not None:
+            return self._ocr_roots
+
+        cnocr_root = Path(os.environ.get("CNOCR_HOME") or self._default_ocr_root("cnocr"))
+        cnstd_root = Path(os.environ.get("CNSTD_HOME") or self._default_ocr_root("cnstd"))
+        bundle_root = Path(resource_path(OCR_MODEL_BUNDLE_DIR))
+
+        copied = 0
+        if bundle_root.exists():
+            copied += self._copy_tree_missing(bundle_root / "cnocr", cnocr_root)
+            copied += self._copy_tree_missing(bundle_root / "cnstd", cnstd_root)
+            if copied:
+                self._log(f"[识别] 已补齐 OCR 本地模型缓存，共复制 {copied} 个文件。")
+
+        os.environ["CNOCR_HOME"] = str(cnocr_root)
+        os.environ["CNSTD_HOME"] = str(cnstd_root)
+        self._ocr_roots = {"cnocr": cnocr_root, "cnstd": cnstd_root, "bundle": bundle_root}
+        return self._ocr_roots
+
+    def _missing_required_ocr_models(self):
+        roots = self._prepare_ocr_runtime_roots()
+        missing = []
+        for package_name, rel_parts, filename in OCR_REQUIRED_MODELS:
+            root = roots.get(package_name)
+            if root is None:
+                continue
+            fp = root.joinpath(*rel_parts, filename)
+            if not fp.exists():
+                missing.append(fp)
+        return missing
+
+    def _package_version(self, package_name):
+        try:
+            return metadata.version(package_name)
+        except metadata.PackageNotFoundError:
+            return "未安装"
+        except Exception:
+            return "未知"
+
+    def _set_ocr_init_error(self, phase, exc=None, detail=None):
+        parts = [f"{phase}失败"]
+        if detail:
+            parts.append(detail)
+        if exc is not None:
+            parts.append(f"{type(exc).__name__}: {exc}")
+
+        missing_models = self._missing_required_ocr_models()
+        if missing_models:
+            parts.append(
+                "缺少本地 OCR 模型文件："
+                + "；".join(str(path) for path in missing_models)
+                + "。请使用包含 ocr_models 目录的完整发布包，或重新执行 build_release.ps1 打包。"
+            )
+
+        parts.append(
+            "依赖版本："
+            f"cnocr={self._package_version('cnocr')}，"
+            f"cnstd={self._package_version('cnstd')}，"
+            f"onnxruntime={self._package_version('onnxruntime')}，"
+            f"rapidocr={self._package_version('rapidocr')}。"
+        )
+
+        self.last_ocr_init_error = " ".join(part for part in parts if part)
+        if exc is not None:
+            self.last_ocr_init_trace = traceback.format_exc(limit=6)
+            self._log(f"[识别] OCR 详细异常: {self.last_ocr_init_trace.strip()}")
+        self._log(f"[识别] OCR 模块{self.last_ocr_init_error}")
+
+    def get_ocr_init_failure_message(self):
+        if self.last_ocr_init_error:
+            return "OCR 模块初始化失败：" + self.last_ocr_init_error
+        missing_models = self._missing_required_ocr_models()
+        if missing_models:
+            return "OCR 模块初始化失败：本地 OCR 模型缺失，请使用完整发布包。"
+        return "OCR 模块初始化失败，请检查完整发布包、cnocr/cnstd/onnxruntime 依赖与本地模型缓存。"
+
     def prepare_recognition_modules(self):
         """预热结算识别所需的 OCR 模块，避免首次上鱼时才加载导致卡顿。"""
+        self.last_ocr_init_error = ""
+        self.last_ocr_init_trace = ""
+        self._prepare_ocr_runtime_roots()
         name_ocr = self._ensure_ocr("name")
         weight_ocr = self._ensure_ocr("weight")
         # 图像兜底匹配同样需要首次构建特征，放在初始化阶段完成。
@@ -123,6 +248,7 @@ class StateMachine:
 
     def _ensure_ocr(self, mode="general"):
         global CnOcr
+        roots = self._prepare_ocr_runtime_roots()
         if CnOcr is None and not self._ocr_import_checked:
             self._ocr_import_checked = True
             try:
@@ -130,27 +256,40 @@ class StateMachine:
                 CnOcr = LoadedCnOcr
             except Exception as exc:
                 self.ocr_available = False
-                self._log(f"[识别] OCR 模块加载失败，请确认已安装 cnocr 与 onnxruntime: {exc}")
+                self._set_ocr_init_error("加载 cnocr/onnxruntime 依赖", exc)
                 return None
         if CnOcr is None:
             self.ocr_available = False
             return None
         if not self.ocr_available:
             return None
+        missing_models = self._missing_required_ocr_models()
+        if missing_models:
+            self.ocr_available = False
+            self._set_ocr_init_error(
+                "初始化本地模型",
+                detail="随程序分发的 OCR 模型未能写入当前用户缓存。"
+            )
+            return None
         if mode not in self.ocr:
             try:
+                common_kwargs = {
+                    "det_model_name": "naive_det",
+                    "rec_root": str(roots["cnocr"]),
+                    "det_root": str(roots["cnstd"]),
+                }
                 if mode == "name":
                     self._log("[系统] 正在初始化鱼名 OCR 识别模块...")
-                    self.ocr[mode] = CnOcr(det_model_name="naive_det")
+                    self.ocr[mode] = CnOcr(**common_kwargs)
                 elif mode == "weight":
                     self._log("[系统] 正在初始化重量 OCR 识别模块...")
-                    self.ocr[mode] = CnOcr(det_model_name="naive_det", cand_alphabet="0123456789gG克")
+                    self.ocr[mode] = CnOcr(**common_kwargs, cand_alphabet="0123456789gG克")
                 else:
                     self._log("[系统] 正在初始化 OCR 单行识别模块...")
-                    self.ocr[mode] = CnOcr(det_model_name="naive_det")
+                    self.ocr[mode] = CnOcr(**common_kwargs)
             except Exception as exc:
                 self.ocr_available = False
-                self._log(f"[识别] OCR 模块初始化失败，已切换到本地图像识别兜底方案: {exc}")
+                self._set_ocr_init_error("初始化 OCR 模型", exc)
                 self.ocr.pop(mode, None)
         return self.ocr.get(mode)
 

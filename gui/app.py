@@ -378,9 +378,10 @@ class RecognitionInitWorker(QThread):
             if ok:
                 self.completed.emit(True, "识别模块初始化完成，可以开始钓鱼。")
             else:
-                self.completed.emit(False, "识别模块初始化失败，请检查 cnocr 与 onnxruntime 环境。")
+                self.completed.emit(False, self.state_machine.get_ocr_init_failure_message())
         except Exception as exc:
-            self.completed.emit(False, f"识别模块初始化失败: {exc}")
+            detail = self.state_machine.get_ocr_init_failure_message()
+            self.completed.emit(False, f"{detail} 原始异常: {exc}")
 
 
 class PolicyDialog(QDialog):
@@ -1397,7 +1398,8 @@ class AppWindow(QMainWindow):
         self.modules_ready = bool(ok)
         self.update_primary_buttons()
         self.write_log(f"[系统] {message}")
-        self.show_toast(message, "success" if ok else "danger")
+        toast_message = message if ok else "识别模块初始化失败，详情已写入运行日志。"
+        self.show_toast(toast_message, "success" if ok else "danger")
         self.ocr_init_worker = None
 
     def show_usage_policy(self):

@@ -25,10 +25,12 @@ function Invoke-Checked {
 }
 
 if (-not $SkipInstall) {
+    Invoke-Checked "python" @("-m", "pip", "install", "-r", "requirements.txt")
     Invoke-Checked "python" @("-m", "pip", "install", "-r", "requirements-build.txt")
 }
 
 Invoke-Checked "python" @("tools\make_icon.py")
+Invoke-Checked "python" @("tools\prepare_ocr_models.py")
 
 if ($Plain) {
     Invoke-Checked "python" @("-m", "PyInstaller", "--clean", "--noconfirm", ".\YHoAutoFish.spec")

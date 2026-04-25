@@ -33,7 +33,7 @@ records.json
 .records.*.json
 
 # Generated release archives
-release/*.zip
+release/
 
 # OS/editor noise
 .DS_Store
