@@ -138,6 +138,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build_release.ps1
 
 构建完成后会生成 `release/YHoAutoFish-windows.zip`。
 
+## 授权许可
+
+本项目采用自定义限制性许可证：[LICENSE](LICENSE)。
+
+你可以将本项目用于个人学习、研究、查看源码和本地非商业使用。但未经作者事先书面许可，禁止任何形式的商用、二次修改、分发、打包发布、转载、镜像、改名发布、去除署名或基于本项目制作衍生版本。
+
+简单来说：可以个人使用和学习，不可以未经允许拿去赚钱、改版、二次发布或冒充原创。
+
 ## 说明
 
 - 本项目仅基于屏幕识别和键盘输入工作。
