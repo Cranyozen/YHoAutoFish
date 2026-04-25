@@ -1,8 +1,8 @@
 {
     "stats": {
-        "total_caught": 773,
-        "total_time_seconds": 30021,
-        "total_attempts": 773,
+        "total_caught": 785,
+        "total_time_seconds": 30250,
+        "total_attempts": 785,
         "consecutive_empty": 0
     },
     "encyclopedia": {
@@ -103,12 +103,12 @@
             "last_caught_at": "2026-04-24 22:58:57"
         },
         "马鞍神仙鱼": {
-            "caught_count": 8,
-            "max_weight": 2908,
+            "caught_count": 10,
+            "max_weight": 3152,
             "rarity": "紫色稀有度",
             "image_path": "异环鱼类图鉴资源\\紫色稀有度\\马鞍神仙鱼.png",
             "first_caught_at": "2026-04-24 19:53:43",
-            "last_caught_at": "2026-04-25 03:14:03"
+            "last_caught_at": "2026-04-25 09:05:03"
         },
         "鲸头鱼": {
             "caught_count": 22,
@@ -143,12 +143,12 @@
             "last_caught_at": "2026-04-25 07:23:05"
         },
         "比目鱼": {
-            "caught_count": 0,
-            "max_weight": 0,
+            "caught_count": 1,
+            "max_weight": 1737,
             "rarity": "绿色稀有度",
             "image_path": "异环鱼类图鉴资源\\绿色稀有度\\比目鱼.png",
-            "first_caught_at": "",
-            "last_caught_at": ""
+            "first_caught_at": "2026-04-25 09:11:10",
+            "last_caught_at": "2026-04-25 09:11:10"
         },
         "水下彩": {
             "caught_count": 0,
@@ -199,12 +199,12 @@
             "last_caught_at": ""
         },
         "紫纹石斑鱼": {
-            "caught_count": 42,
+            "caught_count": 43,
             "max_weight": 2535,
             "rarity": "绿色稀有度",
             "image_path": "异环鱼类图鉴资源\\绿色稀有度\\紫纹石斑鱼.png",
             "first_caught_at": "2026-04-24 19:48:47",
-            "last_caught_at": "2026-04-25 07:07:47"
+            "last_caught_at": "2026-04-25 09:04:20"
         },
         "红翻车鱼": {
             "caught_count": 0,
@@ -239,20 +239,20 @@
             "last_caught_at": ""
         },
         "蓝纹石班鱼": {
-            "caught_count": 55,
+            "caught_count": 56,
             "max_weight": 3528,
             "rarity": "绿色稀有度",
             "image_path": "异环鱼类图鉴资源\\绿色稀有度\\蓝纹石班鱼.png",
             "first_caught_at": "2026-04-24 19:54:01",
-            "last_caught_at": "2026-04-25 07:23:21"
+            "last_caught_at": "2026-04-25 09:04:05"
         },
         "蓝鳍金枪": {
-            "caught_count": 57,
+            "caught_count": 58,
             "max_weight": 2753,
             "rarity": "绿色稀有度",
             "image_path": "异环鱼类图鉴资源\\绿色稀有度\\蓝鳍金枪.png",
             "first_caught_at": "2026-04-24 19:46:58",
-            "last_caught_at": "2026-04-25 07:06:50"
+            "last_caught_at": "2026-04-25 09:05:37"
         },
         "赤鲷": {
             "caught_count": 56,
@@ -351,12 +351,12 @@
             "last_caught_at": ""
         },
         "火箭鱼": {
-            "caught_count": 53,
+            "caught_count": 54,
             "max_weight": 4268,
             "rarity": "蓝色稀有度",
             "image_path": "异环鱼类图鉴资源\\蓝色稀有度\\火箭鱼.png",
             "first_caught_at": "2026-04-24 19:52:48",
-            "last_caught_at": "2026-04-25 06:59:40"
+            "last_caught_at": "2026-04-25 09:05:54"
         },
         "皇后神仙鱼": {
             "caught_count": 0,
@@ -383,12 +383,12 @@
             "last_caught_at": ""
         },
         "红斑鱼": {
-            "caught_count": 32,
+            "caught_count": 33,
             "max_weight": 4661,
             "rarity": "蓝色稀有度",
             "image_path": "异环鱼类图鉴资源\\蓝色稀有度\\红斑鱼.png",
             "first_caught_at": "2026-04-24 19:55:02",
-            "last_caught_at": "2026-04-25 06:59:01"
+            "last_caught_at": "2026-04-25 09:05:21"
         },
         "红绿灯鱼": {
             "caught_count": 0,
@@ -399,12 +399,12 @@
             "last_caught_at": ""
         },
         "绿纹神仙鱼": {
-            "caught_count": 0,
-            "max_weight": 0,
+            "caught_count": 1,
+            "max_weight": 1737,
             "rarity": "蓝色稀有度",
             "image_path": "异环鱼类图鉴资源\\蓝色稀有度\\绿纹神仙鱼.png",
-            "first_caught_at": "",
-            "last_caught_at": ""
+            "first_caught_at": "2026-04-25 09:11:28",
+            "last_caught_at": "2026-04-25 09:11:28"
         },
         "绿面神仙鱼": {
             "caught_count": 0,
@@ -423,12 +423,12 @@
             "last_caught_at": ""
         },
         "蓝火箭鱼": {
-            "caught_count": 34,
+            "caught_count": 35,
             "max_weight": 9968,
             "rarity": "蓝色稀有度",
             "image_path": "异环鱼类图鉴资源\\蓝色稀有度\\蓝火箭鱼.png",
             "first_caught_at": "2026-04-24 19:56:38",
-            "last_caught_at": "2026-04-25 07:22:33"
+            "last_caught_at": "2026-04-25 09:03:50"
         },
         "蓝纹神仙鱼": {
             "caught_count": 0,
@@ -447,12 +447,12 @@
             "last_caught_at": ""
         },
         "蔚蓝流光": {
-            "caught_count": 0,
-            "max_weight": 0,
+            "caught_count": 1,
+            "max_weight": 2708,
             "rarity": "蓝色稀有度",
             "image_path": "异环鱼类图鉴资源\\蓝色稀有度\\蔚蓝流光.png",
-            "first_caught_at": "",
-            "last_caught_at": ""
+            "first_caught_at": "2026-04-25 09:10:53",
+            "last_caught_at": "2026-04-25 09:10:53"
         },
         "金青占鱼": {
             "caught_count": 16,
@@ -479,12 +479,12 @@
             "last_caught_at": ""
         },
         "青占鱼": {
-            "caught_count": 30,
+            "caught_count": 31,
             "max_weight": 3570,
             "rarity": "蓝色稀有度",
             "image_path": "异环鱼类图鉴资源\\蓝色稀有度\\青占鱼.png",
             "first_caught_at": "2026-04-24 19:47:34",
-            "last_caught_at": "2026-04-25 07:00:49"
+            "last_caught_at": "2026-04-25 09:10:35"
         },
         "骑士神仙鱼": {
             "caught_count": 0,
@@ -6122,6 +6122,94 @@
             "weight": 5023,
             "rarity": "蓝色稀有度",
             "image_path": "异环鱼类图鉴资源\\蓝色稀有度\\破晓流光.png"
+        },
+        {
+            "time": "2026-04-25 09:03:50",
+            "fish_name": "蓝火箭鱼",
+            "weight": 1461,
+            "rarity": "蓝色稀有度",
+            "image_path": "异环鱼类图鉴资源\\蓝色稀有度\\蓝火箭鱼.png"
+        },
+        {
+            "time": "2026-04-25 09:04:05",
+            "fish_name": "蓝纹石班鱼",
+            "weight": 1034,
+            "rarity": "绿色稀有度",
+            "image_path": "异环鱼类图鉴资源\\绿色稀有度\\蓝纹石班鱼.png"
+        },
+        {
+            "time": "2026-04-25 09:04:20",
+            "fish_name": "紫纹石斑鱼",
+            "weight": 1862,
+            "rarity": "绿色稀有度",
+            "image_path": "异环鱼类图鉴资源\\绿色稀有度\\紫纹石斑鱼.png"
+        },
+        {
+            "time": "2026-04-25 09:04:42",
+            "fish_name": "马鞍神仙鱼",
+            "weight": 3152,
+            "rarity": "紫色稀有度",
+            "image_path": "异环鱼类图鉴资源\\紫色稀有度\\马鞍神仙鱼.png"
+        },
+        {
+            "time": "2026-04-25 09:05:03",
+            "fish_name": "马鞍神仙鱼",
+            "weight": 2350,
+            "rarity": "紫色稀有度",
+            "image_path": "异环鱼类图鉴资源\\紫色稀有度\\马鞍神仙鱼.png"
+        },
+        {
+            "time": "2026-04-25 09:05:21",
+            "fish_name": "红斑鱼",
+            "weight": 2516,
+            "rarity": "蓝色稀有度",
+            "image_path": "异环鱼类图鉴资源\\蓝色稀有度\\红斑鱼.png"
+        },
+        {
+            "time": "2026-04-25 09:05:37",
+            "fish_name": "蓝鳍金枪",
+            "weight": 1544,
+            "rarity": "绿色稀有度",
+            "image_path": "异环鱼类图鉴资源\\绿色稀有度\\蓝鳍金枪.png"
+        },
+        {
+            "time": "2026-04-25 09:05:54",
+            "fish_name": "火箭鱼",
+            "weight": 2419,
+            "rarity": "蓝色稀有度",
+            "image_path": "异环鱼类图鉴资源\\蓝色稀有度\\火箭鱼.png"
+        },
+        {
+            "time": "2026-04-25 09:10:35",
+            "fish_name": "青占鱼",
+            "weight": 2671,
+            "rarity": "蓝色稀有度",
+            "image_path": "异环鱼类图鉴资源\\蓝色稀有度\\青占鱼.png"
+        },
+        {
+            "time": "2026-04-25 09:10:53",
+            "fish_name": "蔚蓝流光",
+            "weight": 2708,
+            "rarity": "蓝色稀有度",
+            "image_path": "异环鱼类图鉴资源\\蓝色稀有度\\蔚蓝流光.png"
+        },
+        {
+            "time": "2026-04-25 09:11:10",
+            "fish_name": "比目鱼",
+            "weight": 1737,
+            "rarity": "绿色稀有度",
+            "image_path": "异环鱼类图鉴资源\\绿色稀有度\\比目鱼.png"
+        },
+        {
+            "time": "2026-04-25 09:11:28",
+            "fish_name": "绿纹神仙鱼",
+            "weight": 1737,
+            "rarity": "蓝色稀有度",
+            "image_path": "异环鱼类图鉴资源\\蓝色稀有度\\绿纹神仙鱼.png"
         }
-    ]
+    ],
+    "summary": {
+        "last_history_len": 785,
+        "last_time": "2026-04-25 09:11:28"
+    }
 }

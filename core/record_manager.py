@@ -43,6 +43,7 @@ class RecordManager:
             "stats": dict(self.DEFAULT_STATS),
             "encyclopedia": {},
             "history": [],
+            "summary": {"last_history_len": 0, "last_time": ""},
         }
         self._load_failed = False
         self.load_records()
@@ -78,6 +79,7 @@ class RecordManager:
         self.records["stats"].update(data.get("stats", {}))
         self.records["history"] = data.get("history", [])
         self.records["encyclopedia"] = data.get("encyclopedia", {})
+        self.records["summary"] = data.get("summary", {"last_history_len": 0, "last_time": ""})
         self._touch_cache()
 
     def save_records(self):
@@ -503,6 +505,31 @@ class RecordManager:
 
     def get_history(self):
         return list(self.records["history"])
+
+    def get_unsummarized_history(self):
+        history = self.records.get("history", [])
+        summary = self.records.setdefault("summary", {"last_history_len": 0, "last_time": ""})
+        try:
+            cursor = int(summary.get("last_history_len", 0) or 0)
+        except (TypeError, ValueError):
+            cursor = 0
+
+        if 0 <= cursor <= len(history):
+            return list(history[cursor:])
+
+        last_time = summary.get("last_time", "")
+        if last_time:
+            return [record for record in history if record.get("time", "") > last_time]
+        return list(history)
+
+    def mark_summary_completed(self):
+        history = self.records.get("history", [])
+        self.records["summary"] = {
+            "last_history_len": len(history),
+            "last_time": history[-1].get("time", "") if history else "",
+        }
+        self._touch_cache()
+        self.save_records()
 
     def get_encyclopedia(self):
         return dict(self.records["encyclopedia"])
