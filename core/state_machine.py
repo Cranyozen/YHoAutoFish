@@ -923,6 +923,10 @@ class StateMachine:
         """预热结算识别所需的 OCR 模块，避免首次上鱼时才加载导致卡顿。"""
         self.last_ocr_init_error = ""
         self.last_ocr_init_trace = ""
+        if not self.config.get("use_ocr", True):
+            # OCR 已关闭，只预热图像匹配模块
+            self._load_fish_matcher_refs()
+            return True
         self._prepare_ocr_runtime_roots()
         name_ocr = self._ensure_ocr("name")
         weight_ocr = self._ensure_ocr("weight")
@@ -932,6 +936,8 @@ class StateMachine:
 
     def _ensure_ocr(self, mode="general"):
         global CnOcr
+        if not self.config.get("use_ocr", True):
+            return None
         roots = self._prepare_ocr_runtime_roots()
         if CnOcr is None and not self._ocr_import_checked:
             self._ocr_import_checked = True
@@ -1600,7 +1606,7 @@ class StateMachine:
             if fish_name and weight_g > 0:
                 break
 
-        if not fish_name and not self.ocr_available:
+        if not fish_name and (not self.ocr_available or not self.config.get("use_ocr", True)):
             candidate_name = self._match_fish_by_image(rect, fish_image_rois)
             if candidate_name:
                 fish_name = candidate_name
