@@ -307,6 +307,12 @@ class StateMachine:
             {"name": "gray-mask", "threshold": 0.55, "use_edge": False, "use_binary": False, "use_mask": True},
         )
 
+    def _f_button_fast_match_strategies(self):
+        return (
+            {"name": "gray-mask-fast", "threshold": 0.60, "use_mask": True, "mask_threshold": 6, "early_accept": 0.94},
+            {"name": "edge-fast", "threshold": 0.55, "use_edge": True, "early_accept": 0.92},
+        )
+
     def _initial_control_match_strategies(self):
         return (
             {"name": "control-gray-mask", "threshold": 0.60, "use_mask": True, "mask_threshold": 6},
@@ -493,6 +499,38 @@ class StateMachine:
             btn_img = None
 
         if include_f and btn_img is not None:
+            loc, conf, matched_path, strategy_name = self.vis.find_best_template_multi_strategy(
+                btn_img,
+                self._f_button_templates(),
+                self._f_button_fast_match_strategies(),
+                threshold=0.58,
+                scale_range=self._template_scale_range(rect, 0.82, 1.18),
+                scale_steps=4,
+            )
+            best_conf = conf
+            if loc:
+                if require_initial_controls:
+                    initial_cluster = self._detect_initial_control_cluster(rect)
+                else:
+                    initial_cluster = {"count": 0, "matches": [], "confidence": 0.0}
+                if require_initial_controls and initial_cluster.get("count", 0) < 2:
+                    return {
+                        "kind": "F key icon",
+                        "confidence": conf,
+                        "location": None,
+                        "template": matched_path,
+                        "strategy": strategy_name,
+                        "initial_controls": initial_cluster,
+                    }
+                return {
+                    "kind": "initial fishing UI" if initial_cluster.get("count", 0) >= 2 else "F key icon",
+                    "confidence": conf,
+                    "location": loc,
+                    "template": matched_path,
+                    "strategy": strategy_name,
+                    "initial_controls": initial_cluster,
+                }
+
             loc, conf, matched_path, strategy_name = self.vis.find_best_template_multi_strategy(
                 btn_img,
                 self._f_button_templates(),
@@ -1820,7 +1858,7 @@ class StateMachine:
                     cv2.imwrite("debug_f_btn_roi.png", btn_img)
                 conf = ready_info.get("confidence") if ready_info else 0.0
                 self._log(f"[排错] 抛竿图标匹配失败，最高置信度: {conf:.2f}。已保存当前截图至根目录 debug_f_btn_roi.png")
-            self._sleep_interruptible(0.5)
+            self._sleep_interruptible(0.18)
 
     def _handle_waiting(self, rect, roi):
         # 每隔一小段时间检测一次即可，不需要过高频率
@@ -2155,7 +2193,52 @@ class StateMachine:
             "signals": success_signals,
         }
 
-    def _detect_fast_success_result(self, rect):
+    def _detect_ultrafast_success_result(self, rect):
+        close_info = self._match_result_signal(
+            rect,
+            "click close prompt",
+            self._success_close_prompt_templates(),
+            (
+                (0.22, 0.76, 0.56, 0.20),
+            ),
+            (
+                {"name": "close-ultra-edge", "threshold": 0.70, "use_edge": True, "early_accept": 0.92},
+            ),
+            threshold=0.70,
+            low_factor=0.82,
+            high_factor=1.24,
+            scale_steps=3,
+        )
+        if close_info and close_info.get("location") and close_info.get("confidence", 0.0) >= 0.84:
+            return self._build_success_result_info([close_info])
+
+        exp_info = self._match_result_signal(
+            rect,
+            "fishing exp prompt",
+            self._success_exp_templates(),
+            (
+                (0.24, 0.48, 0.52, 0.25),
+            ),
+            (
+                {"name": "exp-ultra-edge", "threshold": 0.64, "use_edge": True, "early_accept": 0.90},
+            ),
+            threshold=0.64,
+            low_factor=0.82,
+            high_factor=1.24,
+            scale_steps=3,
+        )
+        if exp_info and exp_info.get("location") and exp_info.get("confidence", 0.0) >= 0.80:
+            return self._build_success_result_info([exp_info])
+
+        return None
+
+    def _detect_fast_success_result(self, rect, fast_only=False):
+        ultra_info = self._detect_ultrafast_success_result(rect)
+        if ultra_info and ultra_info.get("location"):
+            return ultra_info
+        if fast_only:
+            return None
+
         close_info = self._match_result_signal(
             rect,
             "点击关闭提示",
@@ -2339,7 +2422,7 @@ class StateMachine:
             return False
         self._fishing_result_check_last = now
 
-        success_info = self._detect_fast_success_result(rect)
+        success_info = self._detect_fast_success_result(rect, fast_only=True)
         if success_info and success_info.get("location"):
             self._finish_fast_success_result(rect, success_info, source_label="溜鱼")
             return True
@@ -2356,12 +2439,12 @@ class StateMachine:
 
     def _check_terminal_result_before_bar(self, rect, elapsed):
         now = time.time()
-        interval = 0.75 if elapsed < 3.0 else 0.45
+        interval = 0.25 if elapsed < 3.0 else 0.20
         if now - getattr(self, "_result_quick_check_last", 0) < interval:
             return False
         self._result_quick_check_last = now
 
-        success_info = self._detect_fast_success_result(rect)
+        success_info = self._detect_fast_success_result(rect, fast_only=True)
         if success_info and success_info.get("location"):
             self._finish_fast_success_result(rect, success_info, source_label="溜鱼")
             return True
@@ -2426,7 +2509,7 @@ class StateMachine:
         if not ready_info or not ready_info.get("location"):
             return False
 
-        success_info = self._detect_fast_success_result(rect)
+        success_info = self._detect_fast_success_result(rect, fast_only=True)
         if success_info and success_info.get("location"):
             self._finish_fast_success_result(rect, success_info, source_label=source_label)
             return True
@@ -2526,7 +2609,7 @@ class StateMachine:
             return False
         self._result_quick_check_last = now
 
-        success_info = self._detect_fast_success_result(rect)
+        success_info = self._detect_fast_success_result(rect, fast_only=True)
         if success_info and success_info.get("location"):
             self._finish_fast_success_result(rect, success_info, source_label="溜鱼")
             return True

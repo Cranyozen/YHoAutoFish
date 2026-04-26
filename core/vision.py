@@ -242,6 +242,7 @@ class VisionCore:
         best_loc = None
         best_conf = -1.0
         best_path = None
+        early_accept = kwargs.pop("early_accept", None)
 
         for template_path in template_paths or []:
             loc, conf = self.find_template(screen_img, template_path, threshold=threshold, **kwargs)
@@ -249,6 +250,8 @@ class VisionCore:
                 best_loc = loc
                 best_conf = conf
                 best_path = template_path
+            if loc is not None and early_accept is not None and conf >= float(early_accept):
+                return loc, conf, template_path
 
         if best_loc is not None and best_conf >= threshold:
             return best_loc, best_conf, best_path
@@ -276,6 +279,9 @@ class VisionCore:
                 margin = conf - local_threshold
                 if margin > best_pass[4]:
                     best_pass = (loc, conf, matched_path, strategy_name, margin)
+                early_accept = strategy.get("early_accept")
+                if early_accept is not None and conf >= float(early_accept):
+                    return loc, conf, matched_path, strategy_name
 
         if best_pass[0] is not None:
             return best_pass[0], best_pass[1], best_pass[2], best_pass[3]
