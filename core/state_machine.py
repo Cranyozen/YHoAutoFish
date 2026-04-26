@@ -81,7 +81,9 @@ class StateMachine:
             "cast_animation_delay": 2,
             "settlement_close_delay": 2,
             "bar_missing_timeout": 2,
+            "hook_wait_timeout": 90,
         }
+        self._asset_template_cache = {}
         
     def _log(self, msg):
         """线程安全的日志发送"""
@@ -95,6 +97,9 @@ class StateMachine:
         if self.is_running: return
         self.is_running = True
         self.current_state = self.STATE_IDLE
+        self._waiting_start_time = 0
+        self._fishing_start_time = 0
+        self._missing_start_time = 0
         self.start_timestamp = time.time()
         self._log("钓鱼脚本启动中，正在寻找游戏窗口...")
         
@@ -128,6 +133,62 @@ class StateMachine:
         # 对于超时设置，直接同步到实例变量
         if key == "fishing_timeout":
             self.fishing_timeout = value
+
+    def _resolve_asset_templates(self, cache_key, exact_names=(), required_keywords=()):
+        if cache_key in self._asset_template_cache:
+            return self._asset_template_cache[cache_key]
+
+        assets_dir = Path(resource_path("assets"))
+        paths = []
+        seen = set()
+
+        def add_path(path):
+            normalized = str(path)
+            if path.exists() and normalized not in seen:
+                seen.add(normalized)
+                paths.append(normalized)
+
+        for name in exact_names:
+            add_path(assets_dir / name)
+
+        if assets_dir.exists():
+            for path in assets_dir.glob("*.png"):
+                filename = path.name
+                if all(keyword in filename for keyword in required_keywords):
+                    add_path(path)
+
+        self._asset_template_cache[cache_key] = paths
+        if not paths:
+            self._log(f"[识别] 未找到模板资源: {cache_key}，请检查 assets 目录。")
+        return paths
+
+    def _f_button_templates(self):
+        return self._resolve_asset_templates(
+            "f_button",
+            exact_names=("F键图标.png", "F键图标2.png", "F键图标3.png"),
+            required_keywords=("F键图标",),
+        )
+
+    def _hook_text_templates(self):
+        return self._resolve_asset_templates(
+            "hook_text",
+            exact_names=("上钩文字.png", "钓鱼上钩文字.png"),
+            required_keywords=("上钩文字",),
+        )
+
+    def _failed_text_templates(self):
+        return self._resolve_asset_templates(
+            "failed_text",
+            exact_names=("鱼儿溜走了.png", "钓鱼结算界面鱼儿溜走了.png"),
+            required_keywords=("鱼儿溜走了",),
+        )
+
+    def _template_scale_range(self, rect, low_factor=0.65, high_factor=1.45):
+        if not rect:
+            base_scale = 1.0
+        else:
+            base_scale = max(0.40, min(float(rect[3]) / 900.0, 3.00))
+        return max(0.25, base_scale * low_factor), min(4.00, base_scale * high_factor)
 
     def _default_ocr_root(self, package_name):
         appdata = os.environ.get("APPDATA")
@@ -953,7 +1014,12 @@ class StateMachine:
             self.stop()
             return
             
-        self._log("成功绑定游戏窗口。")
+        initial_rect = self.wm.get_client_rect()
+        dpi_scale = self.wm.get_dpi_scale()
+        if initial_rect:
+            self._log(f"成功绑定游戏窗口。客户区: {initial_rect[2]}x{initial_rect[3]}，DPI倍率: {dpi_scale:.2f}")
+        else:
+            self._log(f"成功绑定游戏窗口。DPI倍率: {dpi_scale:.2f}")
         self.wm.set_foreground()
         time.sleep(1) # 等待窗口置顶完成
         
@@ -1028,15 +1094,25 @@ class StateMachine:
         # 在待机状态下，利用 use_binary=True 强力二值化特征提取。
         # 它可以无视白天水面的高亮背景，只对比纯白色图标本身，使得匹配成功率大幅提升。
         # 此时阈值可以安全地设在 0.65 甚至更高，彻底防止将背景噪点当成 F 键。
-        btn_path = resource_path("assets", "F键图标.png")
-        loc, conf = self.vis.find_template(btn_img, btn_path, threshold=0.60, use_edge=False, use_binary=True)
+        loc, conf, matched_path = self.vis.find_best_template(
+            btn_img,
+            self._f_button_templates(),
+            threshold=0.60,
+            use_edge=False,
+            use_binary=True,
+            binary_threshold=145,
+            scale_range=self._template_scale_range(rect, 0.55, 1.65),
+            scale_steps=11,
+        )
         
         if loc:
-            self._log(f"[待机] 识别到 F 键图标 (置信度: {conf:.2f})，坐标: {loc}。准备抛竿。")
+            matched_name = Path(matched_path).name if matched_path else "未知模板"
+            self._log(f"[待机] 识别到 F 键图标 (置信度: {conf:.2f}，模板: {matched_name})，坐标: {loc}。准备抛竿。")
             self._log("[待机] > 正在向游戏发送 'F' 键点按指令 (150ms)...")
             self.ctrl.key_tap('F', duration=0.15)
             cast_delay = max(1, min(int(self.config.get("cast_animation_delay", 2)), 5))
             self._log(f"[待机] > 发送完成，等待 {cast_delay} 秒抛竿动画...")
+            self._waiting_start_time = time.time()
             self.current_state = self.STATE_WAITING
             time.sleep(cast_delay) # 抛竿动画较长，防抖
         else:
@@ -1048,6 +1124,16 @@ class StateMachine:
     def _handle_waiting(self, rect, roi):
         # 每隔一小段时间检测一次即可，不需要过高频率
         time.sleep(0.1) 
+        if getattr(self, '_waiting_start_time', 0) == 0:
+            self._waiting_start_time = time.time()
+        wait_timeout = max(20, min(int(self.config.get("hook_wait_timeout", 90)), 300))
+        if time.time() - self._waiting_start_time > wait_timeout:
+            self._log(f"[等待] 超过 {wait_timeout} 秒未识别到上钩提示，释放按键并回到待机重新检测。")
+            self.ctrl.release_all()
+            self._waiting_start_time = 0
+            self.current_state = self.STATE_IDLE
+            time.sleep(0.5)
+            return
         
         text_img = self.sc.capture_relative(rect, *roi)
         if text_img is None: return
@@ -1055,13 +1141,22 @@ class StateMachine:
         # 每次重新抛竿后，重置 PID 控制器状态
         self.pid.reset()
         
-        text_path = resource_path("assets", "上钩文字.png")
-        loc, conf = self.vis.find_template(text_img, text_path, threshold=0.7)
+        loc, conf, matched_path = self.vis.find_best_template(
+            text_img,
+            self._hook_text_templates(),
+            threshold=0.68,
+            use_edge=False,
+            use_binary=False,
+            scale_range=self._template_scale_range(rect, 0.62, 1.55),
+            scale_steps=11,
+        )
         
         if loc:
-            self._log(f"[等待] 识别到上钩提示 (置信度: {conf:.2f})，迅速按F！")
+            matched_name = Path(matched_path).name if matched_path else "未知模板"
+            self._log(f"[等待] 识别到上钩提示 (置信度: {conf:.2f}，模板: {matched_name})，迅速按F！")
             self.ctrl.key_tap('F')
             self.fishing_start_time = time.time()
+            self._waiting_start_time = 0
             self.current_state = self.STATE_FISHING
             # 移除了硬编码的 1.5 秒 sleep，改为在 _handle_fishing 中动态等待耐力条出现，
             # 这样对于出现极快的稀有鱼可以做到零延迟响应。
@@ -1196,7 +1291,7 @@ class StateMachine:
         roi_failed_text = (0.2, 0.45, 0.6, 0.1)
         
         max_attempts = 10 # 增加循环次数，但缩短每次的等待时间，实现更敏捷的响应
-        failed_path = resource_path("assets", "鱼儿溜走了.png")
+        failed_templates = self._failed_text_templates()
         
         # 成功结算界面的最底部，有一行非常清晰的白色文字：“点击空白区域关闭”
         # 我们截取屏幕底部的这块区域，通过分析其亮度（是否存在大量白色像素）来判断是否处于成功界面
@@ -1208,9 +1303,19 @@ class StateMachine:
             if failed_img is not None:
                 # 使用真实的资产图片进行特征匹配，彻底解决误判
                 # 鱼儿溜走了是白底黑字，可以直接使用二值化来排除背景光照干扰
-                loc_fail, conf_fail = self.vis.find_template(failed_img, failed_path, threshold=0.60, use_edge=False, use_binary=True)
+                loc_fail, conf_fail, matched_path = self.vis.find_best_template(
+                    failed_img,
+                    failed_templates,
+                    threshold=0.60,
+                    use_edge=False,
+                    use_binary=True,
+                    binary_threshold=145,
+                    scale_range=self._template_scale_range(rect, 0.62, 1.55),
+                    scale_steps=11,
+                )
                 if loc_fail:
-                    self._log(f"[结算] 识别到“鱼儿溜走了”横幅 (置信度: {conf_fail:.2f})！判定为钓鱼失败，已自动重置。")
+                    matched_name = Path(matched_path).name if matched_path else "未知模板"
+                    self._log(f"[结算] 识别到“鱼儿溜走了”横幅 (置信度: {conf_fail:.2f}，模板: {matched_name})！判定为钓鱼失败，已自动重置。")
                     self.current_state = self.STATE_IDLE
                     return
 

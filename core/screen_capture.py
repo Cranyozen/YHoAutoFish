@@ -58,17 +58,26 @@ class ScreenCapture:
         例如 rx=0.5, ry=0.1, rw=0.2, rh=0.1 表示截取中心偏上的一块区域。
         window_rect: (left, top, width, height)
         """
+        absolute = self.relative_rect(window_rect, rx, ry, rw, rh)
+        if absolute is None:
+            return None
+        return self.capture_roi(*absolute)
+
+    def relative_rect(self, window_rect, rx, ry, rw, rh):
+        """把客户区比例 ROI 转换成屏幕绝对像素 ROI。"""
         if not window_rect:
             return None
             
         w_left, w_top, w_width, w_height = window_rect
+        if w_width <= 0 or w_height <= 0:
+            return None
         
         abs_left = w_left + int(w_width * rx)
         abs_top = w_top + int(w_height * ry)
-        abs_width = int(w_width * rw)
-        abs_height = int(w_height * rh)
+        abs_width = max(1, int(w_width * rw))
+        abs_height = max(1, int(w_height * rh))
         
-        return self.capture_roi(abs_left, abs_top, abs_width, abs_height)
+        return abs_left, abs_top, abs_width, abs_height
 
     def close(self):
         """释放 mss 资源"""

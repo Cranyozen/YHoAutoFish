@@ -2,6 +2,7 @@ import win32gui
 import win32process
 import win32api
 import ctypes
+from core.dpi import dpi_scale_for_window
 
 class WindowManager:
     def __init__(self, process_name="HTGame.exe"):
@@ -67,10 +68,19 @@ class WindowManager:
             point = win32gui.ClientToScreen(self.hwnd, (0, 0))
             left, top = point[0], point[1]
             
+            if width <= 0 or height <= 0:
+                return None
+            
             return (left, top, width, height)
         except Exception as e:
             print(f"[WindowManager] 获取客户区坐标失败: {e}")
             return None
+
+    def get_dpi_scale(self):
+        """返回当前游戏窗口相对 96 DPI 的缩放倍率，用于调试和模板缩放参考。"""
+        if not self.hwnd:
+            return 1.0
+        return dpi_scale_for_window(self.hwnd)
 
     def is_foreground(self):
         """检查游戏窗口是否在最前面（获得焦点），用于防误触保护"""

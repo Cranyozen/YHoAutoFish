@@ -62,6 +62,7 @@ hiddenimports = [
     "cnocr",
     "cnstd",
     "cv2",
+    "core.dpi",
     "mss",
     "onnxruntime",
     "PySide6",
@@ -122,6 +123,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    manifest=str(ROOT / "YHoAutoFish.manifest"),
     icon=str(ROOT / "build_assets" / "logo.ico"),
 )
 

@@ -1114,6 +1114,7 @@ class AppWindow(QMainWindow):
             "hold_threshold": 25,
             "deadzone_threshold": 10,
             "fishing_timeout": 180,
+            "hook_wait_timeout": 90,
             "cast_animation_delay": 2,
             "settlement_close_delay": 2,
             "bar_missing_timeout": 2,
@@ -1178,6 +1179,7 @@ class AppWindow(QMainWindow):
         self.sm.update_config("t_hold", self.config.get("hold_threshold", 25))
         self.sm.update_config("t_deadzone", self.config.get("deadzone_threshold", 10))
         self.sm.update_config("fishing_timeout", self.config.get("fishing_timeout", 180))
+        self.sm.update_config("hook_wait_timeout", self.config.get("hook_wait_timeout", 90))
         self.sm.update_config("cast_animation_delay", self.config.get("cast_animation_delay", 2))
         self.sm.update_config("settlement_close_delay", self.config.get("settlement_close_delay", 2))
         self.sm.update_config("bar_missing_timeout", self.config.get("bar_missing_timeout", 2))
@@ -1773,6 +1775,15 @@ class AppWindow(QMainWindow):
             60,
             300,
             "fishing_timeout",
+        )
+        self.slider_hook_wait_timeout = self._settings_block(
+            content_layout,
+            "上钩等待超时",
+            "抛竿后超过该时长仍未识别到上钩提示时，回到待机重新检测，避免永久卡住。",
+            self.config.get("hook_wait_timeout", 90),
+            30,
+            180,
+            "hook_wait_timeout",
         )
         self.slider_bar_missing = self._settings_block(
             content_layout,

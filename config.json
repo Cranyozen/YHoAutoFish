@@ -2,6 +2,7 @@
     "hold_threshold": 15.0,
     "deadzone_threshold": 5.0,
     "fishing_timeout": 180,
+    "hook_wait_timeout": 90,
     "cast_animation_delay": 2,
     "settlement_close_delay": 2,
     "bar_missing_timeout": 2,

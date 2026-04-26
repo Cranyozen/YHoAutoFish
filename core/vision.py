@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import os
 
 class VisionCore:
     def __init__(self):
@@ -8,6 +9,8 @@ class VisionCore:
             "green": {"min": [40, 50, 50], "max": [80, 255, 255]},
             "yellow": {"min": [15, 100, 100], "max": [35, 255, 255]}
         }
+        self._template_cache = {}
+        self._processed_template_cache = {}
         
     def update_hsv_config(self, color_name, min_val, max_val):
         """用于GUI动态调节HSV参数"""
@@ -15,7 +18,84 @@ class VisionCore:
             self.hsv_config[color_name]["min"] = min_val
             self.hsv_config[color_name]["max"] = max_val
 
-    def find_template(self, screen_img, template_path, threshold=0.75, use_edge=False, use_binary=False):
+    def _read_template(self, template_path):
+        path = os.fspath(template_path)
+        if path in self._template_cache:
+            return self._template_cache[path]
+
+        if not os.path.exists(path):
+            self._template_cache[path] = None
+            return None
+
+        template = cv2.imdecode(np.fromfile(path, dtype=np.uint8), -1)
+        self._template_cache[path] = template
+        return template
+
+    def _to_gray(self, image):
+        if image is None:
+            return None
+        if len(image.shape) == 2:
+            return image.copy()
+        if len(image.shape) == 3 and image.shape[2] == 4:
+            alpha_channel = image[:, :, 3]
+            rgb_channels = image[:, :, :3]
+            background = np.zeros_like(rgb_channels, dtype=np.uint8)
+            alpha_factor = alpha_channel[:, :, np.newaxis] / 255.0
+            bgr = (rgb_channels * alpha_factor + background * (1 - alpha_factor)).astype(np.uint8)
+            return cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    def _prepare_for_match(self, image, use_edge=False, use_binary=False, binary_threshold=200):
+        gray = self._to_gray(image)
+        if gray is None:
+            return None
+        if use_binary:
+            _, gray = cv2.threshold(gray, binary_threshold, 255, cv2.THRESH_BINARY)
+        elif use_edge:
+            gray = cv2.Canny(gray, 50, 150)
+        return gray
+
+    def _template_for_match(self, template_path, use_edge=False, use_binary=False, binary_threshold=200):
+        path = os.fspath(template_path)
+        cache_key = (path, bool(use_edge), bool(use_binary), int(binary_threshold))
+        if cache_key in self._processed_template_cache:
+            return self._processed_template_cache[cache_key]
+
+        template = self._read_template(path)
+        if template is None:
+            print(f"[Vision] 无法解析图片数据: {path}")
+            self._processed_template_cache[cache_key] = None
+            return None
+
+        prepared = self._prepare_for_match(template, use_edge=use_edge, use_binary=use_binary, binary_threshold=binary_threshold)
+        self._processed_template_cache[cache_key] = prepared
+        return prepared
+
+    def _build_scales(self, scale_range=None, scale_steps=11):
+        if scale_range is None:
+            low, high = 0.5, 1.5
+        else:
+            low, high = float(scale_range[0]), float(scale_range[1])
+        if low > high:
+            low, high = high, low
+        low = max(0.20, low)
+        high = max(low, min(4.00, high))
+        steps = max(1, int(scale_steps))
+        if steps == 1 or abs(high - low) < 0.001:
+            return [low]
+        return list(np.linspace(high, low, steps))
+
+    def find_template(
+        self,
+        screen_img,
+        template_path,
+        threshold=0.75,
+        use_edge=False,
+        use_binary=False,
+        scale_range=None,
+        scale_steps=11,
+        binary_threshold=200,
+    ):
         """
         在屏幕截图中寻找模板图片 (支持中文路径)
         use_edge: 是否使用 Canny 边缘检测匹配（排除光照干扰）
@@ -23,58 +103,41 @@ class VisionCore:
         返回 (x, y) 坐标，如果没有找到返回 (None, None)
         """
         try:
-            # 避免使用 cv2.imread 读取中文路径报错，使用 numpy fromfile
-            template = cv2.imdecode(np.fromfile(template_path, dtype=np.uint8), -1)
-            
-            if template is None:
-                print(f"[Vision] 无法解析图片数据: {template_path}")
+            screen_gray = self._prepare_for_match(
+                screen_img,
+                use_edge=use_edge,
+                use_binary=use_binary,
+                binary_threshold=binary_threshold,
+            )
+            template_gray = self._template_for_match(
+                template_path,
+                use_edge=use_edge,
+                use_binary=use_binary,
+                binary_threshold=binary_threshold,
+            )
+
+            if screen_gray is None or template_gray is None:
                 return None, 0.0
-
-            # 统一转为灰度图
-            screen_gray = cv2.cvtColor(screen_img, cv2.COLOR_BGR2GRAY)
-            
-            # 如果模板有 alpha 通道（透明背景），我们可以提取它的 mask，但通常为了简单直接用灰度
-            if len(template.shape) == 3 and template.shape[2] == 4:
-                # 把透明背景变成黑色
-                alpha_channel = template[:, :, 3]
-                rgb_channels = template[:, :, :3]
-                # 创建一个白色或黑色背景
-                background = np.zeros_like(rgb_channels, dtype=np.uint8)
-                alpha_factor = alpha_channel[:, :, np.newaxis] / 255.0
-                template_bgr = (rgb_channels * alpha_factor + background * (1 - alpha_factor)).astype(np.uint8)
-                template_gray = cv2.cvtColor(template_bgr, cv2.COLOR_BGR2GRAY)
-            else:
-                template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
-
-            # 强力防干扰：二值化处理
-            # 只提取图像中最亮的部分（纯白色的字母和边框），把所有灰色、蓝色的水面全部变成纯黑
-            if use_binary:
-                # 像素值大于 200 的变成 255（纯白），其他的变成 0（纯黑）
-                _, screen_gray = cv2.threshold(screen_gray, 200, 255, cv2.THRESH_BINARY)
-                _, template_gray = cv2.threshold(template_gray, 200, 255, cv2.THRESH_BINARY)
-
-            if use_edge and not use_binary:
-                screen_gray = cv2.Canny(screen_gray, 50, 150)
-                template_gray = cv2.Canny(template_gray, 50, 150)
             
             best_match = None
             best_val = -1
             best_loc = None
-            best_scale = 1.0
             
-            # 多尺度匹配 (Multi-scale Template Matching)
-            # 因为游戏分辨率不同，截到的F键大小可能和我们存的图片大小不一样
-            # 从 0.5 倍到 1.5 倍，每次缩放 10% 去匹配
-            for scale in np.linspace(0.5, 1.5, 11)[::-1]:
+            for scale in self._build_scales(scale_range=scale_range, scale_steps=scale_steps):
                 # 缩放模板
                 width = int(template_gray.shape[1] * scale)
                 height = int(template_gray.shape[0] * scale)
                 
                 # 如果缩放后的模板比截图还要大，就跳过
-                if width > screen_gray.shape[1] or height > screen_gray.shape[0]:
+                if width < 4 or height < 4 or width > screen_gray.shape[1] or height > screen_gray.shape[0]:
                     continue
-                    
-                resized_template = cv2.resize(template_gray, (width, height))
+
+                interpolation = cv2.INTER_NEAREST if use_binary else (cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR)
+                resized_template = cv2.resize(template_gray, (width, height), interpolation=interpolation)
+                if use_binary:
+                    _, resized_template = cv2.threshold(resized_template, 127, 255, cv2.THRESH_BINARY)
+                if float(np.std(resized_template)) < 1.0:
+                    continue
                 
                 # 进行匹配
                 res = cv2.matchTemplate(screen_gray, resized_template, cv2.TM_CCOEFF_NORMED)
@@ -83,7 +146,6 @@ class VisionCore:
                 if max_val > best_val:
                     best_val = max_val
                     best_loc = max_loc
-                    best_scale = scale
                     best_match = resized_template
 
             if best_val >= threshold and best_match is not None:
@@ -96,6 +158,23 @@ class VisionCore:
         except Exception as e:
             print(f"[Vision] Template matching error: {e}")
             return None, 0.0
+
+    def find_best_template(self, screen_img, template_paths, threshold=0.75, **kwargs):
+        """在多个模板中返回置信度最高的匹配。"""
+        best_loc = None
+        best_conf = -1.0
+        best_path = None
+
+        for template_path in template_paths or []:
+            loc, conf = self.find_template(screen_img, template_path, threshold=threshold, **kwargs)
+            if conf > best_conf:
+                best_loc = loc
+                best_conf = conf
+                best_path = template_path
+
+        if best_loc is not None and best_conf >= threshold:
+            return best_loc, best_conf, best_path
+        return None, best_conf, best_path
 
     def analyze_fishing_bar(self, roi_img):
         """
