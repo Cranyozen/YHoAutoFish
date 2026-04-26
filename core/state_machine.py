@@ -18,6 +18,7 @@ from core.vision import VisionCore
 from core.pid import PIDController
 from core.record_manager import RecordManager
 from core.paths import resource_path
+from core.user_activity_monitor import UserActivityMonitor
 
 CnOcr = None
 
@@ -46,6 +47,8 @@ class StateMachine:
         self.wm = WindowManager()
         self.sc = None 
         self.ctrl = Controller()
+        self.user_activity = UserActivityMonitor()
+        self._user_takeover_exclude_rects = []
         self._input_lock = threading.RLock()
         self.vis = VisionCore()
         self.record_mgr = RecordManager()
@@ -94,12 +97,16 @@ class StateMachine:
             "fishing_result_check_interval": 0.65,
             "fishing_failed_check_interval": 1.25,
             "empty_ready_confirm_delay": 0.45,
+            "bar_confidence_threshold": 0.45,
             "feed_forward_gain": 0.18,
             "safe_zone_ratio": 0.08,
             "control_release_cross_ratio": 0.012,
             "control_reengage_ratio": 0.018,
             "control_switch_ratio": 0.08,
             "control_min_hold_time": 0.14,
+            "user_takeover_protection": True,
+            "user_takeover_mouse_threshold": 12,
+            "user_takeover_start_grace": 1.20,
         }
         self._asset_template_cache = {}
         
@@ -117,6 +124,9 @@ class StateMachine:
         with self._input_lock:
             if self._should_stop():
                 return False
+            if self.wm.is_foreground() and self._check_user_takeover():
+                return False
+            self._note_program_input((key,), duration=float(duration) + 0.45)
             self.ctrl.key_tap(key, duration=duration)
             return True
 
@@ -128,6 +138,45 @@ class StateMachine:
             time.sleep(min(step, deadline - time.time()))
         return not getattr(self, "_stop_requested", False)
 
+    def _note_program_input(self, keys=(), duration=0.45):
+        if getattr(self, "user_activity", None) is not None:
+            self.user_activity.note_program_input(keys, duration=duration)
+
+    def _record_runtime_for_current_run(self):
+        if self.start_timestamp > 0:
+            duration = int(time.time() - self.start_timestamp)
+            if duration > 0:
+                self.total_runtime += duration
+                self.record_mgr.add_runtime(duration)
+            self.start_timestamp = 0
+
+    def _pause_for_user_takeover(self, reason):
+        with self._input_lock:
+            if not self.is_running:
+                return
+            self._stop_requested = True
+            self.is_running = False
+            self.current_state = self.STATE_PAUSED
+            self.ctrl.release_all()
+        self._record_runtime_for_current_run()
+        detail = reason or "检测到用户输入"
+        self._log(f"[安全] {detail}。已暂停自动钓鱼并释放全部按键。需要继续时请重新点击开始，并保持挂机状态不要操作游戏。")
+        if self.log_queue:
+            self.log_queue.put(f"CMD_USER_TAKEOVER_PAUSED::{detail}")
+
+    def _check_user_takeover(self, game_rect=None):
+        if self._should_stop() or getattr(self, "user_activity", None) is None:
+            return False
+        reason = self.user_activity.check(
+            getattr(self.ctrl, "pressed_keys", set()),
+            game_rect=game_rect,
+            excluded_rects=getattr(self, "_user_takeover_exclude_rects", []),
+        )
+        if not reason:
+            return False
+        self._pause_for_user_takeover(reason)
+        return True
+
     def start(self):
         """启动状态机"""
         if self.is_running: return
@@ -135,6 +184,7 @@ class StateMachine:
         self.is_running = True
         self.current_state = self.STATE_IDLE
         self._reset_round_state()
+        self.user_activity.reset()
         self.start_timestamp = time.time()
         self._log("钓鱼脚本启动中，正在寻找游戏窗口...")
         
@@ -153,9 +203,7 @@ class StateMachine:
         
         # 记录本次运行时长
         if self.start_timestamp > 0:
-            duration = int(time.time() - self.start_timestamp)
-            self.total_runtime += duration
-            self.record_mgr.add_runtime(duration)
+            self._record_runtime_for_current_run()
             
         self.ctrl.release_all()
         # 释放系统绘图句柄，防止二次启动时抛出 BitBlt 和 SelectObject 异常
@@ -171,6 +219,27 @@ class StateMachine:
         # 对于超时设置，直接同步到实例变量
         if key == "fishing_timeout":
             self.fishing_timeout = value
+        elif key == "user_takeover_protection":
+            self.user_activity.update_config(enabled=value)
+        elif key == "user_takeover_mouse_threshold":
+            self.user_activity.update_config(mouse_move_threshold=value)
+        elif key == "user_takeover_start_grace":
+            self.user_activity.update_config(start_grace=value)
+        elif key == "user_takeover_exclude_rects":
+            self._user_takeover_exclude_rects = self._normalize_exclude_rects(value)
+
+    def _normalize_exclude_rects(self, rects):
+        normalized = []
+        for rect in rects or []:
+            try:
+                left, top, width, height = rect
+                width = int(width)
+                height = int(height)
+                if width > 0 and height > 0:
+                    normalized.append((int(left), int(top), width, height))
+            except Exception:
+                continue
+        return normalized
 
     def _resolve_asset_templates(self, cache_key, exact_names=(), required_keywords=()):
         if cache_key in self._asset_template_cache:
@@ -642,6 +711,7 @@ class StateMachine:
             self._log(f"[{source_label}] 识别到{kind} (置信度: {confidence:.2f}，模板: {matched_name}，策略: {strategy})。准备抛竿。")
             self._log(f"[{source_label}] > 正在向游戏发送 'F' 键点按指令 (150ms)...")
             self.ctrl.release_all()
+            self._note_program_input(("F",), duration=0.70)
             self.ctrl.key_tap('F', duration=0.15)
             self._last_cast_time = time.time()
             self._waiting_start_time = self._last_cast_time
@@ -1769,6 +1839,7 @@ class StateMachine:
         if not self._sleep_interruptible(1): # 等待窗口置顶完成
             self.sc.close()
             return
+        self.user_activity.reset()
         
         # ROI 定义 (相对于客户区宽高)
         # 缩小寻找 F 键的范围，只截取屏幕真正的右下角边缘，避免把中间的发光背景截进去
@@ -1800,7 +1871,7 @@ class StateMachine:
                     if not self._sleep_interruptible(1):
                         break
                     continue
-                
+
             # 2. 获取实时窗口坐标 (防止窗口被拖动)
             rect = self.wm.get_client_rect()
             if not rect:
@@ -1808,6 +1879,9 @@ class StateMachine:
                 if not self._sleep_interruptible(1):
                     break
                 continue
+
+            if self._check_user_takeover(game_rect=rect):
+                break
                 
             # 3. 状态分发
             if self.current_state == self.STATE_IDLE:

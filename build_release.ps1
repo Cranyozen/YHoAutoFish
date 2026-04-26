@@ -7,8 +7,13 @@ $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $AppName = "YHoAutoFish"
+$VersionSource = Get-Content -LiteralPath (Join-Path $ProjectRoot "core\version.py") -Raw -Encoding UTF8
+if ($VersionSource -notmatch 'APP_VERSION\s*=\s*"([^"]+)"') {
+    throw "Unable to read APP_VERSION from core\version.py"
+}
+$AppVersion = $Matches[1]
 $ReleaseDir = Join-Path $ProjectRoot "release"
-$ZipPath = Join-Path $ReleaseDir "$AppName-windows.zip"
+$ZipPath = Join-Path $ReleaseDir "$AppName-v$AppVersion-windows.zip"
 
 Set-Location $ProjectRoot
 

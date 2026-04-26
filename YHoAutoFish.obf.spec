@@ -12,7 +12,7 @@ from PyInstaller.utils.hooks import (
 
 ROOT = Path.cwd()
 OBF_ROOT = ROOT / "build_obf"
-APP_NAME = "YHoAutoFish"
+from core.version import APP_NAME
 
 
 def existing_data(source, target="."):
@@ -69,6 +69,7 @@ hiddenimports = [
     "core.record_manager",
     "core.screen_capture",
     "core.state_machine",
+    "core.version",
     "core.vision",
     "core.window_manager",
     "cv2",
@@ -145,6 +146,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     manifest=str(ROOT / "YHoAutoFish.manifest"),
+    version=str(ROOT / "version_info.txt"),
     icon=str(ROOT / "build_assets" / "logo.ico"),
 )
 

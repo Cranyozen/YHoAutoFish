@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from core.paths import ensure_writable_file, resource_path
 from core.state_machine import StateMachine
+from core.version import APP_AUTHOR, APP_DISPLAY_NAME, APP_REPOSITORY_URL, APP_VERSION
 from gui.encyclopedia import EncyclopediaWidget
 from gui.fishing_record import FishingRecordWidget
 from gui.theme import (
@@ -33,7 +34,9 @@ from gui.theme import (
     add_shadow,
     panel_stylesheet,
     primary_button_stylesheet,
+    rounded_pixmap,
     scroll_area_stylesheet,
+    scrollbar_stylesheet,
     secondary_button_stylesheet,
     text_edit_stylesheet,
 )
@@ -99,6 +102,39 @@ class NavButton(QPushButton):
         )
 
 
+class SettingsCategoryButton(QPushButton):
+    def __init__(self, text, parent=None):
+        super().__init__(text, parent)
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setMinimumHeight(46)
+        self.setFont(QFont("Microsoft YaHei UI", 10, QFont.DemiBold))
+        self.setStyleSheet(
+            f"""
+            QPushButton {{
+                text-align: left;
+                padding: 0 14px;
+                color: {APP_COLORS['text_dim']};
+                border: 1px solid rgba(111, 145, 182, 0.12);
+                outline: none;
+                border-radius: 15px;
+                background-color: rgba(255, 255, 255, 0.025);
+            }}
+            QPushButton:hover {{
+                color: {APP_COLORS['text']};
+                background-color: rgba(255, 255, 255, 0.055);
+                border: 1px solid rgba(111, 145, 182, 0.22);
+            }}
+            QPushButton:checked {{
+                color: {APP_COLORS['accent_soft']};
+                background-color: rgba(29, 208, 214, 0.14);
+                border: 1px solid rgba(29, 208, 214, 0.42);
+            }}
+            """
+        )
+
+
 class TitleButton(QPushButton):
     def __init__(self, kind, hover_color, parent=None):
         super().__init__("", parent)
@@ -153,6 +189,10 @@ class TitleButton(QPushButton):
         cy = self.height() / 2
         if self.kind == "min":
             painter.drawLine(int(cx - 5), int(cy + 1), int(cx + 5), int(cy + 1))
+        elif self.kind == "about":
+            painter.drawEllipse(int(cx - 6), int(cy - 6), 12, 12)
+            painter.drawPoint(int(cx), int(cy - 3))
+            painter.drawLine(int(cx), int(cy), int(cx), int(cy + 4))
         elif self.kind == "max":
             painter.drawRect(int(cx - 5), int(cy - 5), 10, 10)
         elif self.kind == "restore":
@@ -249,7 +289,7 @@ class TitleBrand(QFrame):
         )
         layout.addWidget(title, 0, Qt.AlignVCenter)
 
-        tag = QLabel("YHo AutoFish")
+        tag = QLabel(f"YHo AutoFish v{APP_VERSION}")
         tag.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         tag.setStyleSheet(
             f"""
@@ -294,14 +334,18 @@ class CustomTitleBar(QFrame):
         layout.addWidget(title)
         layout.addStretch()
 
+        self.btn_about = TitleButton("about", "rgba(29, 208, 214, 0.18)")
         self.btn_min = TitleButton("min", "rgba(90, 129, 166, 0.22)")
         self.btn_max = TitleButton("max", "rgba(90, 129, 166, 0.22)")
         self.btn_close = TitleButton("close", "rgba(255, 102, 126, 0.58)")
 
+        self.btn_about.setToolTip("关于")
         self.btn_min.clicked.connect(self.window_ref.showMinimized)
         self.btn_max.clicked.connect(self.window_ref.toggle_maximize_restore)
         self.btn_close.clicked.connect(self.window_ref.close)
+        self.btn_about.clicked.connect(self.window_ref.show_about_dialog)
 
+        layout.addWidget(self.btn_about)
         layout.addWidget(self.btn_min)
         layout.addWidget(self.btn_max)
         layout.addWidget(self.btn_close)
@@ -439,6 +483,212 @@ class PolicyDialog(QDialog):
         close_btn.setStyleSheet(primary_button_stylesheet())
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn, 0, Qt.AlignRight)
+
+
+class AboutDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setModal(True)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.resize(700, 520)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 14, 14, 14)
+        root.setSpacing(0)
+
+        shell = QFrame()
+        shell.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: rgba(11, 22, 36, 0.98);
+                border: 1px solid rgba(99, 228, 228, 0.28);
+                border-radius: 30px;
+            }}
+            """
+        )
+        add_shadow(shell, blur=36, alpha=130, offset=(0, 14))
+        root.addWidget(shell)
+
+        layout = QVBoxLayout(shell)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(16)
+
+        header = QHBoxLayout()
+        header.setSpacing(16)
+
+        logo = QLabel()
+        logo.setFixedSize(86, 86)
+        logo.setStyleSheet("background: transparent; border: none;")
+        logo_path = resource_path("logo.jpg")
+        pixmap = rounded_pixmap(logo_path, 86, 86, radius=22, keep_full=False)
+        if not pixmap.isNull():
+            logo.setPixmap(pixmap)
+        else:
+            logo.setText("YH")
+            logo.setAlignment(Qt.AlignCenter)
+            logo.setStyleSheet(
+                f"background-color: rgba(29, 208, 214, 0.18); border: 1px solid rgba(99, 228, 228, 0.30); border-radius: 22px; color: {APP_COLORS['accent_soft']}; font-size: 24px; font-weight: 900;"
+            )
+        header.addWidget(logo, 0, Qt.AlignTop)
+
+        title_col = QVBoxLayout()
+        title_col.setSpacing(6)
+        title = QLabel("异环自动钓鱼")
+        title.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 30px; font-weight: 900;"
+        )
+        title_col.addWidget(title)
+
+        subtitle = QLabel(f"YHo AutoFish · 版本 {APP_VERSION}")
+        subtitle.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['accent_soft']}; font-size: 13px; font-weight: 800;"
+        )
+        title_col.addWidget(subtitle)
+
+        description = QLabel("基于屏幕截图、图像识别、OCR 与键盘模拟的自动钓鱼辅助工具。")
+        description.setWordWrap(True)
+        description.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 13px;"
+        )
+        title_col.addWidget(description)
+        header.addLayout(title_col, 1)
+        layout.addLayout(header)
+
+        info_panel = QFrame()
+        info_panel.setProperty("variant", "soft")
+        info_panel.setStyleSheet(panel_stylesheet())
+        info_layout = QVBoxLayout(info_panel)
+        info_layout.setContentsMargins(18, 16, 18, 16)
+        info_layout.setSpacing(10)
+
+        rows = (
+            ("作者", APP_AUTHOR),
+            ("开源地址", APP_REPOSITORY_URL),
+            ("使用范围", "个人学习、研究与本地非商业使用"),
+            ("实现方式", "不读取或修改游戏内存，不注入 DLL，不修改游戏资源文件"),
+            ("风险提示", "自动化行为仍可能违反平台规则，账号与使用风险由使用者自行承担"),
+        )
+        for label, value in rows:
+            row = QLabel(f"<span style='color:{APP_COLORS['text']}; font-weight:900;'>{label}</span>"
+                         f"<span style='color:{APP_COLORS['text_dim']};'>　{value}</span>")
+            row.setWordWrap(True)
+            row.setStyleSheet("background: transparent; border: none; font-size: 13px;")
+            info_layout.addWidget(row)
+        layout.addWidget(info_panel, 1)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
+        github_btn = QPushButton("打开 GitHub")
+        github_btn.setFocusPolicy(Qt.NoFocus)
+        github_btn.setCursor(Qt.PointingHandCursor)
+        github_btn.setStyleSheet(secondary_button_stylesheet())
+        github_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(APP_REPOSITORY_URL)))
+        action_row.addWidget(github_btn)
+
+        license_btn = QPushButton("查看用户协议")
+        license_btn.setFocusPolicy(Qt.NoFocus)
+        license_btn.setCursor(Qt.PointingHandCursor)
+        license_btn.setStyleSheet(secondary_button_stylesheet())
+        if parent is not None and hasattr(parent, "show_usage_policy"):
+            license_btn.clicked.connect(parent.show_usage_policy)
+        action_row.addWidget(license_btn)
+
+        action_row.addStretch()
+
+        close_btn = QPushButton("关闭")
+        close_btn.setFocusPolicy(Qt.NoFocus)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setStyleSheet(primary_button_stylesheet())
+        close_btn.clicked.connect(self.accept)
+        action_row.addWidget(close_btn)
+        layout.addLayout(action_row)
+
+
+class TakeoverPauseDialog(QDialog):
+    def __init__(self, detail, parent=None):
+        super().__init__(None)
+        self.setModal(False)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.resize(620, 330)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(0)
+
+        shell = QFrame()
+        shell.setStyleSheet(
+            """
+            QFrame {
+                background-color: rgba(19, 7, 11, 0.98);
+                border: 2px solid rgba(255, 87, 104, 0.92);
+                border-radius: 28px;
+            }
+            """
+        )
+        add_shadow(shell, blur=42, alpha=180, offset=(0, 12))
+        root.addWidget(shell)
+
+        layout = QVBoxLayout(shell)
+        layout.setContentsMargins(30, 26, 30, 24)
+        layout.setSpacing(14)
+
+        badge = QLabel("自动钓鱼已暂停")
+        badge.setAlignment(Qt.AlignCenter)
+        badge.setStyleSheet(
+            """
+            QLabel {
+                background-color: rgba(255, 87, 104, 0.20);
+                border: 1px solid rgba(255, 151, 90, 0.55);
+                border-radius: 18px;
+                color: #FFE7B0;
+                font-size: 28px;
+                font-weight: 900;
+                padding: 12px 18px;
+            }
+            """
+        )
+        layout.addWidget(badge)
+
+        detail_label = QLabel(f"检测到用户接管：{detail or '游戏窗口内输入'}")
+        detail_label.setWordWrap(True)
+        detail_label.setAlignment(Qt.AlignCenter)
+        detail_label.setStyleSheet(
+            "background: transparent; border: none; color: #FFF7E8; font-size: 15px; font-weight: 800;"
+        )
+        layout.addWidget(detail_label)
+
+        body = QLabel("程序已释放全部按键并停止后续操作。需要继续时，请重新点击“开始钓鱼”，并保持挂机状态不要操作游戏。")
+        body.setWordWrap(True)
+        body.setAlignment(Qt.AlignCenter)
+        body.setStyleSheet(
+            "background: transparent; border: none; color: #FFD3D7; font-size: 13px; line-height: 1.6;"
+        )
+        layout.addWidget(body)
+
+        close_btn = QPushButton("我知道了")
+        close_btn.setFocusPolicy(Qt.NoFocus)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setMinimumHeight(42)
+        close_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: rgba(255, 207, 102, 0.96);
+                color: #261307;
+                border: none;
+                border-radius: 18px;
+                padding: 8px 24px;
+                font-size: 14px;
+                font-weight: 900;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 226, 143, 1.0);
+            }
+            """
+        )
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn, 0, Qt.AlignCenter)
 
 
 class ToastPopup(QFrame):
@@ -765,21 +1015,7 @@ class FloatingControlWindow(QFrame):
             font-size: 12px;
             selection-background-color: rgba(29, 208, 214, 0.24);
         }}
-        QScrollBar:vertical {{
-            background: transparent;
-            width: 8px;
-            margin: 8px 2px 8px 0;
-        }}
-        QScrollBar::handle:vertical {{
-            background: rgba(111, 145, 182, 0.32);
-            border-radius: 4px;
-            min-height: 22px;
-        }}
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-            height: 0px;
-            border: none;
-            background: transparent;
-        }}
+        {scrollbar_stylesheet(compact=True)}
         """
 
     def switch_floating_page(self, index):
@@ -854,6 +1090,8 @@ class FloatingControlWindow(QFrame):
             if self.visibility_timer.isActive():
                 self.visibility_timer.stop()
             self.hide()
+            if hasattr(self.app_window, "_sync_user_takeover_exclude_rects"):
+                self.app_window._sync_user_takeover_exclude_rects()
             self._update_toggle_button()
             return
 
@@ -890,6 +1128,8 @@ class FloatingControlWindow(QFrame):
         self._release_event_hook()
         if self.isVisible():
             self.hide()
+            if hasattr(self.app_window, "_sync_user_takeover_exclude_rects"):
+                self.app_window._sync_user_takeover_exclude_rects()
         self._update_toggle_button()
 
     def _current_game_rect(self, allow_find=False):
@@ -1056,6 +1296,8 @@ class FloatingControlWindow(QFrame):
             return
 
         self._move_to_target(target)
+        if hasattr(self.app_window, "_sync_user_takeover_exclude_rects"):
+            self.app_window._sync_user_takeover_exclude_rects()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -1371,13 +1613,13 @@ class OpenSourceWarningDialog(QDialog):
 class AppWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("异环自动钓鱼")
+        self.setWindowTitle(f"{APP_DISPLAY_NAME} v{APP_VERSION}")
         self.resize(1420, 920)
         self.setMinimumSize(1200, 760)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
 
-        self.config = {
+        self.default_config = {
             "tracking_strength": 180,
             "hold_threshold": 5,
             "deadzone_threshold": 1,
@@ -1391,16 +1633,21 @@ class AppWindow(QMainWindow):
             "fishing_result_check_interval": 0.65,
             "fishing_failed_check_interval": 1.25,
             "empty_ready_confirm_delay": 0.45,
+            "bar_confidence_threshold": 0.45,
             "feed_forward_gain": 0.18,
             "safe_zone_ratio": 0.08,
             "control_release_cross_ratio": 0.012,
             "control_reengage_ratio": 0.018,
             "control_switch_ratio": 0.08,
             "control_min_hold_time": 0.14,
+            "user_takeover_protection": True,
+            "user_takeover_mouse_threshold": 12,
+            "user_takeover_start_grace": 1.20,
             "log_line_limit": 320,
             "auto_switch_to_log": True,
             "debug_mode": False,
         }
+        self.config = dict(self.default_config)
         self.load_config()
 
         self.log_queue = queue.Queue()
@@ -1414,6 +1661,12 @@ class AppWindow(QMainWindow):
         self.modules_initializing = False
         self.init_animation_step = 0
         self.ocr_init_worker = None
+        self._settings_building = False
+        self._settings_dirty = False
+        self._settings_category_buttons = []
+        self._settings_category_keys = {}
+        self._setting_widgets = {}
+        self._settings_saved_snapshot = {}
 
         self.init_ui()
         self._sync_runtime_preferences()
@@ -1471,12 +1724,16 @@ class AppWindow(QMainWindow):
         self.sm.update_config("fishing_result_check_interval", self.config.get("fishing_result_check_interval", 0.65))
         self.sm.update_config("fishing_failed_check_interval", self.config.get("fishing_failed_check_interval", 1.25))
         self.sm.update_config("empty_ready_confirm_delay", self.config.get("empty_ready_confirm_delay", 0.45))
+        self.sm.update_config("bar_confidence_threshold", self.config.get("bar_confidence_threshold", 0.45))
         self.sm.update_config("feed_forward_gain", self.config.get("feed_forward_gain", 0.18))
         self.sm.update_config("safe_zone_ratio", self.config.get("safe_zone_ratio", 0.08))
         self.sm.update_config("control_release_cross_ratio", self.config.get("control_release_cross_ratio", 0.012))
         self.sm.update_config("control_reengage_ratio", self.config.get("control_reengage_ratio", 0.018))
         self.sm.update_config("control_switch_ratio", self.config.get("control_switch_ratio", 0.08))
         self.sm.update_config("control_min_hold_time", self.config.get("control_min_hold_time", 0.14))
+        self.sm.update_config("user_takeover_protection", self.config.get("user_takeover_protection", True))
+        self.sm.update_config("user_takeover_mouse_threshold", self.config.get("user_takeover_mouse_threshold", 12))
+        self.sm.update_config("user_takeover_start_grace", self.config.get("user_takeover_start_grace", 1.20))
         self.sm.update_config("debug_mode", self.config.get("debug_mode", False))
 
     def _refresh_debug_view_state(self):
@@ -1634,6 +1891,12 @@ class AppWindow(QMainWindow):
     def _handle_source_warning_result(self, result):
         if result != QDialog.Accepted:
             self.close()
+
+    def show_about_dialog(self):
+        self.about_dialog = AboutDialog(self)
+        dialog = self.about_dialog
+        dialog.move(self.geometry().center() - dialog.rect().center())
+        dialog.open()
 
     def show_toast(self, text, tone="info"):
         if hasattr(self, "toast"):
@@ -2013,11 +2276,10 @@ class AppWindow(QMainWindow):
         return page
 
     def _build_settings_page(self):
-        container = QScrollArea()
-        container.setWidgetResizable(True)
-        container.setStyleSheet(scroll_area_stylesheet())
-        container.viewport().setStyleSheet("background: transparent;")
-        container.viewport().setAutoFillBackground(False)
+        self._settings_building = True
+        self._setting_widgets = {}
+        self._settings_category_buttons = []
+        self._settings_category_keys = {}
 
         page = QWidget()
         page.setStyleSheet("background: transparent;")
@@ -2028,19 +2290,52 @@ class AppWindow(QMainWindow):
         content.setProperty("variant", "elevated")
         content.setStyleSheet(panel_stylesheet())
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(28, 24, 28, 28)
-        content_layout.setSpacing(18)
+        content_layout.setContentsMargins(28, 24, 28, 22)
+        content_layout.setSpacing(16)
 
         title = QLabel("高级设置")
         title.setProperty("role", "headline")
         content_layout.addWidget(title)
 
-        subtitle = QLabel("调整自动钓鱼运行保护、日志展示、调试视图等常用选项。")
+        subtitle = QLabel("按用途查看和调整自动钓鱼参数。建议只修改当前遇到问题对应的分类，保存后立即应用。")
         subtitle.setProperty("role", "subtle")
         content_layout.addWidget(subtitle)
 
+        body_row = QHBoxLayout()
+        body_row.setSpacing(18)
+
+        category_panel = QFrame()
+        category_panel.setProperty("variant", "soft")
+        category_panel.setFixedWidth(220)
+        category_panel.setStyleSheet(panel_stylesheet())
+        category_layout = QVBoxLayout(category_panel)
+        category_layout.setContentsMargins(14, 14, 14, 14)
+        category_layout.setSpacing(8)
+
+        category_title = QLabel("设置分类")
+        category_title.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 15px; font-weight: 900;"
+        )
+        category_layout.addWidget(category_title)
+
+        category_note = QLabel("选择左侧分类后，只显示对应参数。")
+        category_note.setWordWrap(True)
+        category_note.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 11px;"
+        )
+        category_layout.addWidget(category_note)
+
+        self.settings_category_layout = category_layout
+        self.settings_stack = QStackedWidget()
+        self.settings_stack.setStyleSheet("QStackedWidget { background: transparent; border: none; }")
+
+        fishing_page, fishing_layout = self._build_settings_category_page(
+            "溜鱼控制",
+            "控制游标追随耐力条的力度、死区、前馈和按键切换逻辑。这里的参数会直接影响溜鱼手感。",
+        )
+        fishing_keys = []
         self.slider_hold = self._settings_block(
-            content_layout,
+            fishing_layout,
             "跟鱼力度",
             "数值越大，PID 修正和前馈追赶越积极；程序会保持按键到接近越过中心，适配较慢的 A/D 移速。",
             self.config.get("tracking_strength", 180),
@@ -2048,8 +2343,9 @@ class AppWindow(QMainWindow):
             240,
             "tracking_strength",
         )
+        fishing_keys.append("tracking_strength")
         self.slider_hold_threshold = self._settings_block(
-            content_layout,
+            fishing_layout,
             "稳定释放阈值",
             "游标接近绿条中心时重新触发按键的阈值；默认偏低，减少在中心一侧提前滑行。",
             self.config.get("hold_threshold", 5),
@@ -2057,8 +2353,9 @@ class AppWindow(QMainWindow):
             30,
             "hold_threshold",
         )
+        fishing_keys.append("hold_threshold")
         self.slider_deadzone = self._settings_block(
-            content_layout,
+            fishing_layout,
             "跟鱼死区",
             "数值越小，游标出现约 1 像素偏离就会更快按键追赶；最低档会更频繁左右修正。",
             self.config.get("deadzone_threshold", 1),
@@ -2066,8 +2363,102 @@ class AppWindow(QMainWindow):
             15,
             "deadzone_threshold",
         )
+        fishing_keys.append("deadzone_threshold")
+        self.slider_feed_forward = self._settings_block(
+            fishing_layout,
+            "预测追赶前馈",
+            "根据耐力条移动趋势提前补偿 A/D 按键。值越大越主动，过大可能造成越过中心后的摆动。",
+            self.config.get("feed_forward_gain", 0.18),
+            0,
+            45,
+            "feed_forward_gain",
+            value_scale=0.01,
+            display_scale=1,
+            display_suffix="%",
+            config_decimals=3,
+        )
+        fishing_keys.append("feed_forward_gain")
+        self.slider_safe_zone = self._settings_block(
+            fishing_layout,
+            "中心安全区宽度",
+            "按耐力条宽度计算的安全区。值越小越贴近中心追鱼，值越大越稳但反应会更保守。",
+            self.config.get("safe_zone_ratio", 0.08),
+            4,
+            28,
+            "safe_zone_ratio",
+            value_scale=0.01,
+            display_scale=1,
+            display_suffix="%",
+            config_decimals=3,
+        )
+        fishing_keys.append("safe_zone_ratio")
+        self.slider_release_cross = self._settings_block(
+            fishing_layout,
+            "过中心释放比例",
+            "游标越过目标中心后释放当前方向的比例阈值。较低值会更快停手，适合现在较慢的官方移速。",
+            self.config.get("control_release_cross_ratio", 0.012),
+            1,
+            12,
+            "control_release_cross_ratio",
+            value_scale=0.01,
+            display_scale=1,
+            display_suffix="%",
+            config_decimals=3,
+        )
+        fishing_keys.append("control_release_cross_ratio")
+        self.slider_reengage = self._settings_block(
+            fishing_layout,
+            "重新接管比例",
+            "释放后再次按键追赶的比例阈值。数值越低，左右修正越频繁，响应越快。",
+            self.config.get("control_reengage_ratio", 0.018),
+            1,
+            18,
+            "control_reengage_ratio",
+            value_scale=0.01,
+            display_scale=1,
+            display_suffix="%",
+            config_decimals=3,
+        )
+        fishing_keys.append("control_reengage_ratio")
+        self.slider_switch = self._settings_block(
+            fishing_layout,
+            "反向切换比例",
+            "误差超过该比例时允许直接换方向追赶。值越小越灵敏，值越大越少来回切换。",
+            self.config.get("control_switch_ratio", 0.08),
+            4,
+            25,
+            "control_switch_ratio",
+            value_scale=0.01,
+            display_scale=1,
+            display_suffix="%",
+            config_decimals=3,
+        )
+        fishing_keys.append("control_switch_ratio")
+        self.slider_min_hold = self._settings_block(
+            fishing_layout,
+            "最短按键保持",
+            "每次 A/D 按下后的最短保持时间。值越小越灵敏，值过小可能增加高频抖动。",
+            self.config.get("control_min_hold_time", 0.14),
+            3,
+            35,
+            "control_min_hold_time",
+            value_scale=0.01,
+            display_scale=0.01,
+            display_suffix="s",
+            display_decimals=2,
+            config_decimals=3,
+        )
+        fishing_keys.append("control_min_hold_time")
+        fishing_layout.addStretch()
+        self._add_settings_category("溜鱼控制", fishing_page, fishing_keys)
+
+        timing_page, timing_layout = self._build_settings_category_page(
+            "流程与超时",
+            "控制抛竿、等待、恢复和结算阶段的等待时间。用于适配机器性能、网络延迟和游戏动画速度。",
+        )
+        timing_keys = []
         self.slider_timeout = self._settings_block(
-            content_layout,
+            timing_layout,
             "防卡死超时",
             "单次钓鱼等待超过该时长时自动重置，避免界面停在异常状态。",
             self.config.get("fishing_timeout", 180),
@@ -2075,8 +2466,9 @@ class AppWindow(QMainWindow):
             300,
             "fishing_timeout",
         )
+        timing_keys.append("fishing_timeout")
         self.slider_hook_wait_timeout = self._settings_block(
-            content_layout,
+            timing_layout,
             "上钩等待超时",
             "抛竿后超过该时长仍未识别到上钩提示时，回到待机重新检测，避免永久卡住。",
             self.config.get("hook_wait_timeout", 90),
@@ -2084,8 +2476,9 @@ class AppWindow(QMainWindow):
             180,
             "hook_wait_timeout",
         )
+        timing_keys.append("hook_wait_timeout")
         self.slider_bar_missing = self._settings_block(
-            content_layout,
+            timing_layout,
             "耐力条丢失容忍",
             "耐力条短暂识别不到时等待的秒数；画面抖动或帧率低可适当调大。",
             self.config.get("bar_missing_timeout", 3),
@@ -2093,8 +2486,9 @@ class AppWindow(QMainWindow):
             5,
             "bar_missing_timeout",
         )
+        timing_keys.append("bar_missing_timeout")
         self.slider_cast_delay = self._settings_block(
-            content_layout,
+            timing_layout,
             "抛竿动画等待",
             "按下抛竿键后等待动画完成的秒数；机器或网络较慢时可适当调大。",
             self.config.get("cast_animation_delay", 2),
@@ -2102,8 +2496,9 @@ class AppWindow(QMainWindow):
             5,
             "cast_animation_delay",
         )
+        timing_keys.append("cast_animation_delay")
         self.slider_close_delay = self._settings_block(
-            content_layout,
+            timing_layout,
             "结算关闭等待",
             "捕获后按 ESC 关闭结算界面，再等待回到可抛竿状态的秒数。",
             self.config.get("settlement_close_delay", 1),
@@ -2111,8 +2506,135 @@ class AppWindow(QMainWindow):
             5,
             "settlement_close_delay",
         )
+        timing_keys.append("settlement_close_delay")
+        self.slider_pre_control_timeout = self._settings_block(
+            timing_layout,
+            "上钩后进入溜鱼超时",
+            "识别上钩并按 F 后，超过该秒数仍未进入有效溜鱼控制时自动恢复。",
+            self.config.get("pre_control_timeout", 14),
+            10,
+            30,
+            "pre_control_timeout",
+        )
+        timing_keys.append("pre_control_timeout")
+        self.slider_recovery_timeout = self._settings_block(
+            timing_layout,
+            "异常恢复超时",
+            "失败或异常后等待回到可抛竿界面的最长秒数，超过后会尝试轻量恢复。",
+            self.config.get("recovery_timeout", 8),
+            4,
+            20,
+            "recovery_timeout",
+        )
+        timing_keys.append("recovery_timeout")
+        timing_layout.addStretch()
+        self._add_settings_category("流程与超时", timing_page, timing_keys)
+
+        recognition_page, recognition_layout = self._build_settings_category_page(
+            "识别与判定",
+            "控制耐力条置信度和结算/失败检测频率。数值越激进，响应越快；数值越保守，误判风险越低。",
+        )
+        recognition_keys = []
+        self.slider_bar_confidence = self._settings_block(
+            recognition_layout,
+            "耐力条最低置信度",
+            "低于该置信度时会复用短时间历史位置或忽略结果，降低树林等背景色误参与的风险。",
+            self.config.get("bar_confidence_threshold", 0.45),
+            25,
+            85,
+            "bar_confidence_threshold",
+            value_scale=0.01,
+            display_scale=1,
+            display_suffix="%",
+            config_decimals=3,
+        )
+        recognition_keys.append("bar_confidence_threshold")
+        self.slider_result_interval = self._settings_block(
+            recognition_layout,
+            "成功结算检测间隔",
+            "溜鱼阶段检测成功结算特征的间隔。越小越快识别结算，但截图匹配频率会更高。",
+            self.config.get("fishing_result_check_interval", 0.65),
+            7,
+            30,
+            "fishing_result_check_interval",
+            value_scale=0.05,
+            display_scale=0.05,
+            display_suffix="s",
+            display_decimals=2,
+            config_decimals=2,
+        )
+        recognition_keys.append("fishing_result_check_interval")
+        self.slider_failed_interval = self._settings_block(
+            recognition_layout,
+            "失败横幅检测间隔",
+            "检测鱼儿溜走提示的间隔。越小越快恢复，但会增加失败模板匹配频率。",
+            self.config.get("fishing_failed_check_interval", 1.25),
+            14,
+            60,
+            "fishing_failed_check_interval",
+            value_scale=0.05,
+            display_scale=0.05,
+            display_suffix="s",
+            display_decimals=2,
+            config_decimals=2,
+        )
+        recognition_keys.append("fishing_failed_check_interval")
+        self.slider_empty_ready_delay = self._settings_block(
+            recognition_layout,
+            "空杆回到初始确认",
+            "看到初始界面后继续确认的时长，用于区分空杆和短暂结算切换。",
+            self.config.get("empty_ready_confirm_delay", 0.45),
+            5,
+            60,
+            "empty_ready_confirm_delay",
+            value_scale=0.05,
+            display_scale=0.05,
+            display_suffix="s",
+            display_decimals=2,
+            config_decimals=2,
+        )
+        recognition_keys.append("empty_ready_confirm_delay")
+        recognition_layout.addStretch()
+        self._add_settings_category("识别与判定", recognition_page, recognition_keys)
+
+        safety_page, safety_layout = self._build_settings_category_page(
+            "安全接管",
+            "当用户点击游戏窗口或在游戏内按键时，程序会释放按键并暂停，避免和用户操作冲突。",
+        )
+        safety_keys = []
+        self.takeover_protection_button = self._settings_toggle_block(
+            safety_layout,
+            "用户接管自动暂停",
+            "开启后，只检测游戏窗口内点击和游戏内键盘操作；移动鼠标不会触发暂停，悬浮窗点击也会被排除。",
+            self.config.get("user_takeover_protection", True),
+            "user_takeover_protection",
+        )
+        safety_keys.append("user_takeover_protection")
+        self.slider_takeover_start_grace = self._settings_block(
+            safety_layout,
+            "启动接管宽限",
+            "点击开始后短暂忽略用户输入，避免启动瞬间的鼠标点击被误认为接管。",
+            self.config.get("user_takeover_start_grace", 1.20),
+            0,
+            50,
+            "user_takeover_start_grace",
+            value_scale=0.1,
+            display_scale=0.1,
+            display_suffix="s",
+            display_decimals=1,
+            config_decimals=2,
+        )
+        safety_keys.append("user_takeover_start_grace")
+        safety_layout.addStretch()
+        self._add_settings_category("安全接管", safety_page, safety_keys)
+
+        display_page, display_layout = self._build_settings_category_page(
+            "界面与日志",
+            "控制运行日志保留量、启动后页面跳转和调试溜鱼视图。调试视图会增加少量界面刷新开销。",
+        )
+        display_keys = []
         self.slider_log_limit = self._settings_block(
-            content_layout,
+            display_layout,
             "日志保留条数",
             "控制运行日志页保留的最近输出数量，数值越大可回看更多记录。",
             self.config.get("log_line_limit", 320),
@@ -2120,31 +2642,134 @@ class AppWindow(QMainWindow):
             800,
             "log_line_limit",
         )
+        display_keys.append("log_line_limit")
         self.auto_log_button = self._settings_toggle_block(
-            content_layout,
+            display_layout,
             "启动后跳转运行日志",
             "开启后，点击开始钓鱼会自动切换到运行日志页，方便观察实时状态。",
             self.config.get("auto_switch_to_log", True),
             "auto_switch_to_log",
         )
+        display_keys.append("auto_switch_to_log")
         self.debug_view_button = self._settings_toggle_block(
-            content_layout,
+            display_layout,
             "调试溜鱼视图",
             "开启后，运行日志页会显示溜鱼阶段的实时识别画面，便于排查识别异常与反馈问题。",
             self.config.get("debug_mode", False),
             "debug_mode",
         )
+        display_keys.append("debug_mode")
+        display_layout.addStretch()
+        self._add_settings_category("界面与日志", display_page, display_keys)
 
-        save_btn = QPushButton("保存并应用设置")
-        save_btn.setFocusPolicy(Qt.NoFocus)
-        save_btn.setStyleSheet(primary_button_stylesheet())
-        save_btn.clicked.connect(self._save_settings)
-        content_layout.addWidget(save_btn)
-        content_layout.addStretch()
+        category_layout.addStretch()
+        body_row.addWidget(category_panel)
+        self.settings_scroll = QScrollArea()
+        self.settings_scroll.setWidgetResizable(True)
+        self.settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.settings_scroll.setStyleSheet(scroll_area_stylesheet())
+        self.settings_scroll.viewport().setStyleSheet("background: transparent;")
+        self.settings_scroll.viewport().setAutoFillBackground(False)
+        self.settings_scroll.setWidget(self.settings_stack)
+        body_row.addWidget(self.settings_scroll, 1)
+        content_layout.addLayout(body_row, 1)
 
-        layout.addWidget(content)
-        container.setWidget(page)
-        return container
+        action_bar = QFrame()
+        self.settings_action_bar = action_bar
+        action_bar.setObjectName("settingsActionBar")
+        action_bar.setMinimumHeight(74)
+        self._apply_settings_action_bar_style(False)
+        add_shadow(action_bar, blur=22, alpha=90, offset=(0, 6))
+        action_layout = QHBoxLayout(action_bar)
+        action_layout.setContentsMargins(18, 12, 18, 12)
+        action_layout.setSpacing(12)
+
+        self.settings_status_label = QLabel("当前设置已保存")
+        self.settings_status_label.setWordWrap(True)
+        self.settings_status_label.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 12px;"
+        )
+        action_layout.addWidget(self.settings_status_label, 1)
+
+        self.reset_settings_btn = QPushButton("恢复当前分类推荐值")
+        self.reset_settings_btn.setFocusPolicy(Qt.NoFocus)
+        self.reset_settings_btn.setStyleSheet(secondary_button_stylesheet())
+        self.reset_settings_btn.clicked.connect(self._reset_current_settings_category)
+        action_layout.addWidget(self.reset_settings_btn)
+
+        self.save_settings_btn = QPushButton("保存并应用")
+        self.save_settings_btn.setFocusPolicy(Qt.NoFocus)
+        self.save_settings_btn.setStyleSheet(primary_button_stylesheet())
+        self.save_settings_btn.clicked.connect(self._save_settings)
+        action_layout.addWidget(self.save_settings_btn)
+
+        content_layout.addWidget(action_bar)
+
+        layout.addWidget(content, 1)
+        if self._settings_category_buttons:
+            self._switch_settings_category(0)
+        self._settings_building = False
+        self._refresh_settings_saved_snapshot()
+        self._set_settings_dirty(False)
+        return page
+
+    def _build_settings_category_page(self, title, description):
+        page = QWidget()
+        page.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+
+        title_label = QLabel(title)
+        title_label.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 20px; font-weight: 900;"
+        )
+        layout.addWidget(title_label)
+
+        note_label = QLabel(description)
+        note_label.setWordWrap(True)
+        note_label.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;"
+        )
+        layout.addWidget(note_label)
+        return page, layout
+
+    def _add_settings_category(self, title, page, keys):
+        index = self.settings_stack.addWidget(page)
+        self._settings_category_keys[index] = list(keys)
+        button = SettingsCategoryButton(title)
+        button.clicked.connect(lambda _checked=False, category_index=index: self._switch_settings_category(category_index))
+        self.settings_category_layout.addWidget(button)
+        self._settings_category_buttons.append(button)
+        return button
+
+    def _switch_settings_category(self, index):
+        if not hasattr(self, "settings_stack"):
+            return
+        self.settings_stack.setCurrentIndex(index)
+        for button_index, button in enumerate(self._settings_category_buttons):
+            button.setChecked(button_index == index)
+        if hasattr(self, "settings_scroll"):
+            QTimer.singleShot(0, lambda: self.settings_scroll.verticalScrollBar().setValue(0))
+
+    def _apply_settings_action_bar_style(self, dirty):
+        if not hasattr(self, "settings_action_bar"):
+            return
+        if dirty:
+            bg = "rgba(43, 33, 15, 0.96)"
+            border = "rgba(241, 190, 103, 0.74)"
+        else:
+            bg = "rgba(13, 31, 45, 0.96)"
+            border = "rgba(99, 228, 228, 0.34)"
+        self.settings_action_bar.setStyleSheet(
+            f"""
+            QFrame#settingsActionBar {{
+                background-color: {bg};
+                border: 1px solid {border};
+                border-radius: 20px;
+            }}
+            """
+        )
 
     def _settings_panel(self):
         block = QFrame()
@@ -2153,7 +2778,21 @@ class AppWindow(QMainWindow):
         add_shadow(block, blur=20, alpha=85, offset=(0, 8))
         return block
 
-    def _settings_block(self, parent_layout, title, note, value, minimum, maximum, key):
+    def _settings_block(
+        self,
+        parent_layout,
+        title,
+        note,
+        value,
+        minimum,
+        maximum,
+        key,
+        value_scale=1.0,
+        display_scale=None,
+        display_suffix="",
+        display_decimals=0,
+        config_decimals=None,
+    ):
         block = self._settings_panel()
 
         layout = QVBoxLayout(block)
@@ -2166,7 +2805,14 @@ class AppWindow(QMainWindow):
         top.addWidget(title_label)
         top.addStretch()
 
-        value_label = QLabel(str(int(value)))
+        display_scale = value_scale if display_scale is None else display_scale
+        try:
+            slider_value = int(round(float(value) / float(value_scale)))
+        except (TypeError, ValueError, ZeroDivisionError):
+            slider_value = int(minimum)
+        slider_value = max(int(minimum), min(int(maximum), slider_value))
+
+        value_label = QLabel(self._format_slider_label(slider_value, display_scale, display_suffix, display_decimals))
         value_label.setStyleSheet(
             f"""
             QLabel {{
@@ -2180,16 +2826,19 @@ class AppWindow(QMainWindow):
             }}
             """
         )
+        value_label.setMinimumWidth(74)
+        value_label.setAlignment(Qt.AlignCenter)
         top.addWidget(value_label)
         layout.addLayout(top)
 
         note_label = QLabel(note)
+        note_label.setWordWrap(True)
         note_label.setStyleSheet(f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;")
         layout.addWidget(note_label)
 
         slider = NoWheelSlider(Qt.Horizontal)
         slider.setRange(minimum, maximum)
-        slider.setValue(int(value))
+        slider.setValue(slider_value)
         slider.setFocusPolicy(Qt.NoFocus)
         slider.setStyleSheet(
             f"""
@@ -2212,9 +2861,37 @@ class AppWindow(QMainWindow):
             }}
             """
         )
-        slider.valueChanged.connect(lambda new_value, label=value_label, config_key=key: self._update_slider_value(label, config_key, new_value))
+        slider.valueChanged.connect(
+            lambda new_value,
+            label=value_label,
+            config_key=key,
+            cfg_scale=value_scale,
+            disp_scale=display_scale,
+            suffix=display_suffix,
+            disp_decimals=display_decimals,
+            cfg_decimals=config_decimals: self._update_slider_value(
+                label,
+                config_key,
+                new_value,
+                cfg_scale,
+                disp_scale,
+                suffix,
+                disp_decimals,
+                cfg_decimals,
+            )
+        )
         layout.addWidget(slider)
         parent_layout.addWidget(block)
+        self._setting_widgets[key] = {
+            "type": "slider",
+            "widget": slider,
+            "value_scale": value_scale,
+            "display_scale": display_scale,
+            "display_suffix": display_suffix,
+            "display_decimals": display_decimals,
+            "config_decimals": config_decimals,
+        }
+        self.config[key] = self._config_from_slider_value(slider_value, value_scale, config_decimals)
         return slider
 
     def _settings_toggle_block(self, parent_layout, title, note, checked, key):
@@ -2245,6 +2922,7 @@ class AppWindow(QMainWindow):
         button.setFocusPolicy(Qt.NoFocus)
         button.setChecked(bool(checked))
         button.setStyleSheet(secondary_button_stylesheet())
+        button.setMinimumWidth(86)
         button.toggled.connect(
             lambda is_checked, cfg_key=key, btn=button: self._update_toggle_value(btn, cfg_key, is_checked)
         )
@@ -2252,19 +2930,146 @@ class AppWindow(QMainWindow):
         layout.addWidget(button)
 
         parent_layout.addWidget(block)
+        self._setting_widgets[key] = {"type": "toggle", "widget": button}
         return button
 
-    def _update_slider_value(self, label, key, value):
-        label.setText(str(int(value)))
-        self.config[key] = int(value)
+    def _format_slider_label(self, value, display_scale=1.0, display_suffix="", display_decimals=0):
+        display_value = float(value) * float(display_scale)
+        if int(display_decimals) <= 0:
+            text = str(int(round(display_value)))
+        else:
+            text = f"{display_value:.{int(display_decimals)}f}".rstrip("0").rstrip(".")
+        return f"{text}{display_suffix}"
+
+    def _config_from_slider_value(self, value, value_scale=1.0, config_decimals=None):
+        scaled_value = float(value) * float(value_scale)
+        if config_decimals is not None:
+            return round(scaled_value, int(config_decimals))
+        if abs(float(value_scale) - 1.0) < 0.000001:
+            return int(round(scaled_value))
+        return scaled_value
+
+    def _update_slider_value(
+        self,
+        label,
+        key,
+        value,
+        value_scale=1.0,
+        display_scale=1.0,
+        display_suffix="",
+        display_decimals=0,
+        config_decimals=None,
+    ):
+        label.setText(self._format_slider_label(value, display_scale, display_suffix, display_decimals))
+        self.config[key] = self._config_from_slider_value(value, value_scale, config_decimals)
+        self._mark_settings_dirty()
 
     def _update_toggle_value(self, button, key, checked):
         self.config[key] = bool(checked)
         button.setText("已开启" if checked else "已关闭")
+        self._mark_settings_dirty()
+
+    def _mark_settings_dirty(self):
+        if getattr(self, "_settings_building", False):
+            return
+        self._set_settings_dirty(self._has_unsaved_settings_changes())
+
+    def _set_settings_dirty(self, dirty):
+        self._settings_dirty = bool(dirty)
+        self._apply_settings_action_bar_style(self._settings_dirty)
+        if hasattr(self, "save_settings_btn"):
+            self.save_settings_btn.setEnabled(self._settings_dirty)
+        if hasattr(self, "settings_status_label"):
+            if self._settings_dirty:
+                self.settings_status_label.setText("有未保存更改。保存后会立即同步到运行参数，并写入配置文件。")
+                self.settings_status_label.setStyleSheet(
+                    f"background: transparent; border: none; color: {APP_COLORS['warning']}; font-size: 12px; font-weight: 700;"
+                )
+            else:
+                self.settings_status_label.setText("当前设置已保存")
+                self.settings_status_label.setStyleSheet(
+                    f"background: transparent; border: none; color: {APP_COLORS['text_soft']}; font-size: 12px;"
+                )
+
+    def _settings_snapshot_keys(self):
+        if getattr(self, "_setting_widgets", None):
+            return tuple(self._setting_widgets.keys())
+        return tuple(self.default_config.keys())
+
+    def _settings_config_snapshot(self):
+        return {key: self.config.get(key) for key in self._settings_snapshot_keys()}
+
+    def _refresh_settings_saved_snapshot(self):
+        self._settings_saved_snapshot = self._settings_config_snapshot()
+
+    def _settings_values_equal(self, left, right):
+        if isinstance(left, bool) or isinstance(right, bool):
+            return bool(left) == bool(right)
+        if isinstance(left, (int, float)) or isinstance(right, (int, float)):
+            try:
+                return abs(float(left) - float(right)) <= 0.000001
+            except (TypeError, ValueError):
+                return False
+        return left == right
+
+    def _has_unsaved_settings_changes(self):
+        snapshot = getattr(self, "_settings_saved_snapshot", {}) or {}
+        for key, current_value in self._settings_config_snapshot().items():
+            if key not in snapshot:
+                return True
+            if not self._settings_values_equal(current_value, snapshot.get(key)):
+                return True
+        return False
+
+    def _reset_current_settings_category(self):
+        if not hasattr(self, "settings_stack"):
+            return
+        index = self.settings_stack.currentIndex()
+        keys = self._settings_category_keys.get(index, [])
+        changed = False
+        for key in keys:
+            if key not in self.default_config:
+                continue
+            widget_info = self._setting_widgets.get(key)
+            if not widget_info:
+                continue
+            default_value = self.default_config[key]
+            if widget_info["type"] == "slider":
+                slider = widget_info["widget"]
+                value_scale = widget_info.get("value_scale", 1.0)
+                try:
+                    slider_value = int(round(float(default_value) / float(value_scale)))
+                except (TypeError, ValueError, ZeroDivisionError):
+                    continue
+                slider_value = max(slider.minimum(), min(slider.maximum(), slider_value))
+                if slider.value() != slider_value:
+                    changed = True
+                    slider.setValue(slider_value)
+                else:
+                    self.config[key] = self._config_from_slider_value(
+                        slider_value,
+                        value_scale,
+                        widget_info.get("config_decimals"),
+                    )
+            elif widget_info["type"] == "toggle":
+                button = widget_info["widget"]
+                target = bool(default_value)
+                if button.isChecked() != target:
+                    changed = True
+                    button.setChecked(target)
+                else:
+                    self.config[key] = target
+        if changed:
+            self._mark_settings_dirty()
+            self.show_toast("已恢复当前分类推荐值，请保存应用", "info")
+        else:
+            self.show_toast("当前分类已是推荐值", "info")
 
     def _save_settings(self):
         self._apply_state_machine_config()
         if self.save_config():
+            self._refresh_settings_saved_snapshot()
+            self._set_settings_dirty(False)
             self.show_toast("高级设置已保存并应用", "success")
         else:
             self.show_toast("设置保存失败，请查看运行日志", "danger")
@@ -2285,6 +3090,12 @@ class AppWindow(QMainWindow):
         if msg == "CMD_STOP_UPDATE_GUI":
             self.update_ui_on_stop()
             return
+        if isinstance(msg, str) and msg.startswith("CMD_USER_TAKEOVER_PAUSED"):
+            reason = ""
+            if "::" in msg:
+                reason = msg.split("::", 1)[1]
+            self.handle_user_takeover_pause(reason)
+            return
 
         import time
 
@@ -2299,6 +3110,7 @@ class AppWindow(QMainWindow):
             self.floating_window.refresh_log_view()
 
     def process_queue(self):
+        self._sync_user_takeover_exclude_rects()
         try:
             while True:
                 self.write_log(self.log_queue.get_nowait())
@@ -2314,6 +3126,46 @@ class AppWindow(QMainWindow):
         if latest_debug_frame is not None:
             self._set_debug_frame(latest_debug_frame)
 
+    def _sync_user_takeover_exclude_rects(self):
+        rects = []
+        floating = getattr(self, "floating_window", None)
+        if floating is not None and floating.isVisible():
+            geom = floating.frameGeometry()
+            padding = 10
+            rects.append(
+                (
+                    geom.x() - padding,
+                    geom.y() - padding,
+                    geom.width() + padding * 2,
+                    geom.height() + padding * 2,
+                )
+            )
+        self.sm.update_config("user_takeover_exclude_rects", rects)
+
+    def handle_user_takeover_pause(self, reason=""):
+        self.update_ui_on_stop()
+        self.status_chip.set_status("已暂停", "stopped")
+        self.write_log(">>> 检测到用户接管游戏，自动钓鱼已暂停。")
+        self.show_toast("检测到用户接管，自动钓鱼已暂停", "warning")
+        if getattr(self, "_takeover_pause_dialog_visible", False):
+            return
+
+        detail = reason or "检测到游戏窗口内输入"
+        dialog = TakeoverPauseDialog(detail)
+        self._takeover_pause_dialog_visible = True
+        self.takeover_pause_dialog = dialog
+        dialog.finished.connect(lambda _result: setattr(self, "_takeover_pause_dialog_visible", False))
+        rect = self.sm.wm.get_client_rect()
+        if rect:
+            left, top, width, height = rect
+            dialog.move(int(left + width / 2 - dialog.width() / 2), int(top + height / 2 - dialog.height() / 2))
+        else:
+            screen_center = self.screen().availableGeometry().center()
+            dialog.move(screen_center - dialog.rect().center())
+        dialog.open()
+        dialog.raise_()
+        dialog.activateWindow()
+
     def start_bot(self):
         if self.sm.is_running:
             return
@@ -2322,6 +3174,7 @@ class AppWindow(QMainWindow):
             return
 
         self._apply_state_machine_config()
+        self._takeover_pause_dialog_visible = False
 
         self.status_chip.set_status("运行中", "running")
         if self.config.get("auto_switch_to_log", True):

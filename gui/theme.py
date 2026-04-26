@@ -374,6 +374,80 @@ def scroll_area_stylesheet():
     """
 
 
+def scrollbar_stylesheet(compact=False):
+    width = 9 if compact else 12
+    radius = 4 if compact else 6
+    min_handle = 28 if compact else 40
+    margin_v = "8px 2px 8px 0" if compact else "10px 4px 10px 0"
+    margin_h = "0 8px 2px 8px" if compact else "0 10px 4px 10px"
+    return f"""
+    QScrollBar:vertical {{
+        border: none;
+        background: rgba(255, 255, 255, 0.035);
+        width: {width}px;
+        margin: {margin_v};
+        border-radius: {radius}px;
+    }}
+    QScrollBar::handle:vertical {{
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+            stop:0 rgba(126, 242, 244, 0.94),
+            stop:0.55 rgba(29, 208, 214, 0.70),
+            stop:1 rgba(14, 126, 146, 0.62));
+        min-height: {min_handle}px;
+        border-radius: {radius}px;
+    }}
+    QScrollBar::handle:vertical:hover {{
+        background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+            stop:0 rgba(176, 252, 253, 0.98),
+            stop:0.58 rgba(89, 231, 235, 0.86),
+            stop:1 rgba(29, 208, 214, 0.72));
+    }}
+    QScrollBar::handle:vertical:pressed {{
+        background: rgba(241, 190, 103, 0.92);
+    }}
+    QScrollBar:horizontal {{
+        border: none;
+        background: rgba(255, 255, 255, 0.035);
+        height: {width}px;
+        margin: {margin_h};
+        border-radius: {radius}px;
+    }}
+    QScrollBar::handle:horizontal {{
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+            stop:0 rgba(126, 242, 244, 0.92),
+            stop:0.55 rgba(29, 208, 214, 0.68),
+            stop:1 rgba(14, 126, 146, 0.58));
+        min-width: {min_handle}px;
+        border-radius: {radius}px;
+    }}
+    QScrollBar::handle:horizontal:hover {{
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+            stop:0 rgba(176, 252, 253, 0.98),
+            stop:0.58 rgba(89, 231, 235, 0.84),
+            stop:1 rgba(29, 208, 214, 0.70));
+    }}
+    QScrollBar::handle:horizontal:pressed {{
+        background: rgba(241, 190, 103, 0.92);
+    }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+        width: 0px;
+        height: 0px;
+        border: none;
+        background: transparent;
+    }}
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical,
+    QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal,
+    QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical,
+    QScrollBar::left-arrow:horizontal, QScrollBar::right-arrow:horizontal {{
+        background: transparent;
+        border: none;
+        width: 0px;
+        height: 0px;
+    }}
+    """
+
+
 def text_edit_stylesheet():
     return f"""
     QTextEdit {{
@@ -385,4 +459,5 @@ def text_edit_stylesheet():
         font-family: Consolas, 'Microsoft YaHei UI';
         font-size: 13px;
     }}
+    {scrollbar_stylesheet(compact=False)}
     """
