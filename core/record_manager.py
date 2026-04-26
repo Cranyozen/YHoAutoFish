@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import random
 import re
@@ -10,6 +11,8 @@ from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 
 from core.paths import ensure_writable_file, resource_path
+
+logger = logging.getLogger(__name__)
 
 _RECORD_FILE_LOCK = threading.RLock()
 OCR_CONFUSABLE_CHARS = str.maketrans({
@@ -79,12 +82,12 @@ class RecordManager:
             except json.JSONDecodeError as exc:
                 if attempt == 2:
                     self._load_failed = True
-                    print(f"Failed to load records: {exc}")
+                    logger.error("Failed to load records: %s", exc)
                     return
                 time.sleep(0.08)
             except Exception as exc:
                 self._load_failed = True
-                print(f"Failed to load records: {exc}")
+                logger.error("Failed to load records: %s", exc)
                 return
 
         self.records["stats"].update(data.get("stats", {}))
@@ -193,7 +196,7 @@ class RecordManager:
                         pass
                     raise
         except Exception as exc:
-            print(f"Failed to save records: {exc}")
+            logger.error("Failed to save records: %s", exc)
 
     def _decode_mojibake(self, text):
         if not isinstance(text, str) or not text:

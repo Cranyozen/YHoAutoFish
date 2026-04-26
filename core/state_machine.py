@@ -1,6 +1,7 @@
 import time
 import threading
 import queue
+import logging
 import cv2
 import numpy as np
 import os
@@ -18,6 +19,8 @@ from core.vision import VisionCore
 from core.pid import PIDController
 from core.record_manager import RecordManager
 from core.paths import resource_path
+
+logger = logging.getLogger(__name__)
 
 CnOcr = None
 
@@ -105,10 +108,7 @@ class StateMachine:
         
     def _log(self, msg):
         """线程安全的日志发送"""
-        if self.log_queue is not None:
-            self.log_queue.put(msg)
-        else:
-            print(msg)
+        logger.info(msg)
 
     def _should_stop(self):
         return bool(getattr(self, "_stop_requested", False) or not getattr(self, "is_running", False))

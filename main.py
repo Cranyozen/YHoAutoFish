@@ -1,5 +1,6 @@
 import sys
 import os
+import logging
 
 # Ensure modules can be found
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -14,15 +15,19 @@ from core.paths import resource_path
 from gui.app import AppWindow
 
 if __name__ == '__main__':
-    print("Starting app...", flush=True)
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="[%(levelname)s] %(name)s: %(message)s",
+    )
+    logging.info("Starting app...")
     app = QApplication(sys.argv)
-    
+
     app.setApplicationName("FishingBot")
     app.setWindowIcon(QIcon(resource_path("logo.jpg")))
-    
-    print("Creating AppWindow...", flush=True)
+
+    logging.info("Creating AppWindow...")
     window = AppWindow()
-    print("Showing AppWindow...", flush=True)
+    logging.info("Showing AppWindow...")
     window.show()
     
     sys.exit(app.exec())

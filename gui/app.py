@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import queue
 import time
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.paths import ensure_writable_file, resource_path
+from core.log import setup_logging
 from core.state_machine import StateMachine
 from gui.encyclopedia import EncyclopediaWidget
 from gui.fishing_record import FishingRecordWidget
@@ -1406,6 +1408,7 @@ class AppWindow(QMainWindow):
 
         self.log_queue = queue.Queue()
         self.debug_queue = queue.Queue()
+        setup_logging(self.log_queue)
         self.log_deque = deque(maxlen=int(self.config.get("log_line_limit", 320)))
         self._log_version = 0
         self.sm = StateMachine(log_queue=self.log_queue, debug_queue=self.debug_queue)
@@ -1433,7 +1436,7 @@ class AppWindow(QMainWindow):
             with open(CONFIG_FILE, "r", encoding="utf-8") as file:
                 self.config.update(json.load(file))
         except Exception as exc:
-            print(f"Config load error: {exc}")
+            logging.error("Config load error: %s", exc)
 
     def save_config(self):
         try:
