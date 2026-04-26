@@ -363,13 +363,13 @@ class VisionCore:
             refined_band_mask[hsv[:, :, 2] < adaptive_v_floor] = 0
             if cv2.countNonZero(refined_band_mask[band_y1:band_y2, :]) >= max(8, int(roi_w * roi_h * 0.0004)):
                 band_mask = refined_band_mask
-        close_w = max(7, int(roi_w * 0.035))
+        close_w = max(5, int(roi_w * 0.018))
         band_mask = cv2.morphologyEx(band_mask, cv2.MORPH_CLOSE, np.ones((3, close_w), np.uint8))
         band_mask = cv2.morphologyEx(band_mask, cv2.MORPH_OPEN, np.ones((2, 3), np.uint8))
 
-        target = self._select_green_bar_component(band_mask, roi_w, roi_h, band_y1, band_y2, cursor)
+        target = self._select_green_bar_component(band_mask, roi_w, roi_h, band_y1, band_y2, cursor, hsv=hsv)
         if target is None:
-            relaxed_close_w = max(5, int(roi_w * 0.025))
+            relaxed_close_w = max(5, int(roi_w * 0.020))
             relaxed_band_mask = cv2.morphologyEx(relaxed_band_mask, cv2.MORPH_CLOSE, np.ones((3, relaxed_close_w), np.uint8))
             relaxed_band_mask = cv2.morphologyEx(relaxed_band_mask, cv2.MORPH_OPEN, np.ones((2, 3), np.uint8))
             target = self._select_green_bar_component(
@@ -379,10 +379,11 @@ class VisionCore:
                 band_y1,
                 band_y2,
                 cursor,
+                hsv=hsv,
                 relaxed=True,
             )
         if target is None:
-            target = self._select_green_candidate_near_cursor(green_candidates, cursor, roi_w, roi_h)
+            target = self._select_green_candidate_near_cursor(green_candidates, cursor, roi_w, roi_h, hsv=hsv)
 
         cursor_x = int(cursor["cx"])
         target_x = int(target["cx"]) if target else None
@@ -410,7 +411,11 @@ class VisionCore:
             )
             cv2.line(debug_img, (target_x, 0), (target_x, roi_h), (0, 255, 0), 2)
         source = cursor.get("source", "color")
-        cv2.putText(debug_img, f"conf {confidence:.2f} {source}", (4, max(12, roi_h - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+        if target:
+            track_score = target.get("track_score", 0.0)
+            cv2.putText(debug_img, f"conf {confidence:.2f} {source} rail {track_score:.2f}", (4, max(12, roi_h - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+        else:
+            cv2.putText(debug_img, f"conf {confidence:.2f} {source}", (4, max(12, roi_h - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
 
         return target_x, cursor_x, target_w, debug_img, confidence
 
@@ -570,17 +575,56 @@ class VisionCore:
 
         return best
 
-    def _select_green_bar_component(self, mask, roi_w, roi_h, band_y1, band_y2, cursor, relaxed=False):
+    def _green_track_score(self, hsv, x, y, w, h, cursor=None):
+        """评估绿色候选是否嵌在 HUD 深色轨道内，而不是树林背景。"""
+        if hsv is None or w <= 0 or h <= 0:
+            return 0.0
+
+        roi_h, roi_w = hsv.shape[:2]
+        pad_x = max(4, int(h * 1.2))
+        pad_y = max(3, int(h * 1.4))
+        x1 = max(0, int(x) - pad_x)
+        x2 = min(roi_w, int(x + w) + pad_x)
+        top_y1 = max(0, int(y) - pad_y)
+        top_y2 = max(0, int(y) - 1)
+        bottom_y1 = min(roi_h, int(y + h) + 1)
+        bottom_y2 = min(roi_h, int(y + h) + pad_y + 1)
+
+        value = hsv[:, :, 2]
+        saturation = hsv[:, :, 1]
+        dark_mask = (value < 105) | ((value < 140) & (saturation < 130))
+
+        ratios = []
+        for y1, y2 in ((top_y1, top_y2), (bottom_y1, bottom_y2)):
+            region = dark_mask[y1:y2, x1:x2]
+            if region.size:
+                ratios.append(float(np.count_nonzero(region)) / float(region.size))
+        adjacent_dark = sum(ratios) / len(ratios) if ratios else 0.0
+        balanced_dark = min(ratios) if len(ratios) >= 2 else 0.0
+
+        thin_limit = max(4.0, roi_h * 0.20)
+        thin_score = 1.0 - min(1.0, max(0.0, float(h) - thin_limit) / max(1.0, roi_h * 0.22))
+
+        cursor_score = 0.5
+        if cursor is not None:
+            cy = float(y) + float(h) / 2.0
+            y_delta = abs(cy - float(cursor.get("cy", cy)))
+            cursor_score = 1.0 - min(1.0, y_delta / max(3.0, roi_h * 0.14))
+
+        return max(0.0, min(1.0, balanced_dark * 0.46 + adjacent_dark * 0.18 + thin_score * 0.22 + cursor_score * 0.14))
+
+    def _select_green_bar_component(self, mask, roi_w, roi_h, band_y1, band_y2, cursor, hsv=None, relaxed=False):
         count, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, 8)
         best = None
         band_h = max(1, band_y2 - band_y1)
         min_width = max(8 if relaxed else 12, int(roi_w * (0.026 if relaxed else 0.035)))
+        max_width = max(min_width + 1, int(roi_w * (0.42 if relaxed else 0.34)))
         min_area = max(7 if relaxed else 10, int(roi_w * roi_h * (0.00030 if relaxed else 0.00045)))
-        max_height = max(6, int(min(roi_h * (0.72 if relaxed else 0.62), band_h * (1.05 if relaxed else 0.92))))
+        max_height = max(5, int(min(roi_h * (0.30 if relaxed else 0.22), band_h * (0.62 if relaxed else 0.48))))
 
         for index in range(1, count):
             x, y, w, h, area = stats[index]
-            if area < min_area or w < min_width or h < 2 or h > max_height:
+            if area < min_area or w < min_width or w > max_width or h < 2 or h > max_height:
                 continue
             aspect = w / max(h, 1)
             if aspect < (1.65 if relaxed else 2.2):
@@ -590,9 +634,14 @@ class VisionCore:
                 continue
             cx, cy = centroids[index]
             y_delta = abs(cy - cursor["cy"])
-            if y_delta > max(cursor["h"] * (1.25 if relaxed else 0.95), roi_h * (0.36 if relaxed else 0.28)):
+            if y_delta > max(4.0 if relaxed else 3.0, roi_h * (0.11 if relaxed else 0.08)):
                 continue
             if w > roi_w * 0.95 and h > roi_h * 0.42:
+                continue
+
+            track_score = self._green_track_score(hsv, x, y, w, h, cursor=cursor)
+            min_track_score = 0.22 if relaxed else 0.30
+            if track_score < min_track_score:
                 continue
 
             edge_touch_penalty = 0.0
@@ -606,9 +655,9 @@ class VisionCore:
             fill_score = min(1.0, fill_ratio / 0.55)
             y_score = 1.0 - min(1.0, y_delta / max(1.0, band_h * 0.65))
             height_score = 1.0 - min(1.0, abs(h - max(3.0, cursor["h"] * 0.32)) / max(3.0, cursor["h"]))
-            confidence = aspect_score * 0.24 + width_score * 0.24 + fill_score * 0.20 + y_score * 0.24 + height_score * 0.08
+            confidence = aspect_score * 0.20 + width_score * 0.20 + fill_score * 0.16 + y_score * 0.20 + height_score * 0.06 + track_score * 0.18
             confidence = max(0.0, min(0.98, confidence - edge_touch_penalty))
-            score = confidence + width_score * 0.10 + y_score * 0.08
+            score = confidence + width_score * 0.08 + y_score * 0.08 + track_score * 0.12
 
             if best is None or score > best["score"]:
                 best = {
@@ -621,25 +670,39 @@ class VisionCore:
                     "cy": float(cy),
                     "confidence": confidence,
                     "score": score,
+                    "track_score": track_score,
                 }
         return best
 
-    def _select_green_candidate_near_cursor(self, candidates, cursor, roi_w, roi_h):
+    def _select_green_candidate_near_cursor(self, candidates, cursor, roi_w, roi_h, hsv=None):
         best = None
         for candidate in candidates or []:
             y_delta = abs(float(candidate["cy"]) - float(cursor["cy"]))
-            if y_delta > max(float(cursor["h"]) * 1.35, roi_h * 0.38):
+            if y_delta > max(4.0, roi_h * 0.10):
+                continue
+            if candidate["w"] > roi_w * 0.42:
                 continue
             if candidate["w"] > roi_w * 0.92 and candidate["h"] > roi_h * 0.38:
+                continue
+            track_score = self._green_track_score(
+                hsv,
+                candidate["x"],
+                candidate["y"],
+                candidate["w"],
+                candidate["h"],
+                cursor=cursor,
+            )
+            if track_score < 0.24:
                 continue
             width_score = min(1.0, candidate["w"] / max(1.0, roi_w * 0.16))
             y_score = 1.0 - min(1.0, y_delta / max(1.0, roi_h * 0.38))
             base_conf = float(candidate.get("confidence", 0.0))
-            score = base_conf * 0.55 + width_score * 0.25 + y_score * 0.20
+            score = base_conf * 0.42 + width_score * 0.22 + y_score * 0.18 + track_score * 0.18
             if best is None or score > best["score"]:
                 best = dict(candidate)
                 best["score"] = score
-                best["confidence"] = max(0.0, min(0.88, base_conf * 0.70 + y_score * 0.18 + width_score * 0.12))
+                best["track_score"] = track_score
+                best["confidence"] = max(0.0, min(0.88, base_conf * 0.58 + y_score * 0.16 + width_score * 0.10 + track_score * 0.16))
         return best
 
     def _get_center_x(self, mask, is_vertical=False, strict_shape=True, return_width=False):

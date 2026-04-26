@@ -1378,7 +1378,7 @@ class AppWindow(QMainWindow):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
 
         self.config = {
-            "tracking_strength": 170,
+            "tracking_strength": 180,
             "hold_threshold": 5,
             "deadzone_threshold": 1,
             "fishing_timeout": 180,
@@ -1386,16 +1386,17 @@ class AppWindow(QMainWindow):
             "cast_animation_delay": 2,
             "settlement_close_delay": 1,
             "bar_missing_timeout": 3,
+            "pre_control_timeout": 14,
             "recovery_timeout": 8,
             "fishing_result_check_interval": 0.65,
             "fishing_failed_check_interval": 1.25,
-            "empty_ready_confirm_delay": 0.9,
-            "feed_forward_gain": 0.24,
-            "safe_zone_ratio": 0.10,
-            "control_release_cross_ratio": 0.035,
-            "control_reengage_ratio": 0.065,
-            "control_switch_ratio": 0.11,
-            "control_min_hold_time": 0.12,
+            "empty_ready_confirm_delay": 0.45,
+            "feed_forward_gain": 0.18,
+            "safe_zone_ratio": 0.08,
+            "control_release_cross_ratio": 0.012,
+            "control_reengage_ratio": 0.018,
+            "control_switch_ratio": 0.08,
+            "control_min_hold_time": 0.14,
             "log_line_limit": 320,
             "auto_switch_to_log": True,
             "debug_mode": False,
@@ -1457,7 +1458,7 @@ class AppWindow(QMainWindow):
             self.floating_window.refresh_log_view(force=True)
 
     def _apply_state_machine_config(self):
-        self.sm.update_config("tracking_strength", self.config.get("tracking_strength", 170))
+        self.sm.update_config("tracking_strength", self.config.get("tracking_strength", 180))
         self.sm.update_config("t_hold", self.config.get("hold_threshold", 5))
         self.sm.update_config("t_deadzone", self.config.get("deadzone_threshold", 1))
         self.sm.update_config("fishing_timeout", self.config.get("fishing_timeout", 180))
@@ -1465,16 +1466,17 @@ class AppWindow(QMainWindow):
         self.sm.update_config("cast_animation_delay", self.config.get("cast_animation_delay", 2))
         self.sm.update_config("settlement_close_delay", self.config.get("settlement_close_delay", 1))
         self.sm.update_config("bar_missing_timeout", self.config.get("bar_missing_timeout", 3))
+        self.sm.update_config("pre_control_timeout", self.config.get("pre_control_timeout", 14))
         self.sm.update_config("recovery_timeout", self.config.get("recovery_timeout", 8))
         self.sm.update_config("fishing_result_check_interval", self.config.get("fishing_result_check_interval", 0.65))
         self.sm.update_config("fishing_failed_check_interval", self.config.get("fishing_failed_check_interval", 1.25))
-        self.sm.update_config("empty_ready_confirm_delay", self.config.get("empty_ready_confirm_delay", 0.9))
-        self.sm.update_config("feed_forward_gain", self.config.get("feed_forward_gain", 0.24))
-        self.sm.update_config("safe_zone_ratio", self.config.get("safe_zone_ratio", 0.10))
-        self.sm.update_config("control_release_cross_ratio", self.config.get("control_release_cross_ratio", 0.035))
-        self.sm.update_config("control_reengage_ratio", self.config.get("control_reengage_ratio", 0.065))
-        self.sm.update_config("control_switch_ratio", self.config.get("control_switch_ratio", 0.11))
-        self.sm.update_config("control_min_hold_time", self.config.get("control_min_hold_time", 0.12))
+        self.sm.update_config("empty_ready_confirm_delay", self.config.get("empty_ready_confirm_delay", 0.45))
+        self.sm.update_config("feed_forward_gain", self.config.get("feed_forward_gain", 0.18))
+        self.sm.update_config("safe_zone_ratio", self.config.get("safe_zone_ratio", 0.08))
+        self.sm.update_config("control_release_cross_ratio", self.config.get("control_release_cross_ratio", 0.012))
+        self.sm.update_config("control_reengage_ratio", self.config.get("control_reengage_ratio", 0.018))
+        self.sm.update_config("control_switch_ratio", self.config.get("control_switch_ratio", 0.08))
+        self.sm.update_config("control_min_hold_time", self.config.get("control_min_hold_time", 0.14))
         self.sm.update_config("debug_mode", self.config.get("debug_mode", False))
 
     def _refresh_debug_view_state(self):
@@ -2041,7 +2043,7 @@ class AppWindow(QMainWindow):
             content_layout,
             "跟鱼力度",
             "数值越大，PID 修正和前馈追赶越积极；程序会保持按键到接近越过中心，适配较慢的 A/D 移速。",
-            self.config.get("tracking_strength", 170),
+            self.config.get("tracking_strength", 180),
             70,
             240,
             "tracking_strength",
@@ -2058,7 +2060,7 @@ class AppWindow(QMainWindow):
         self.slider_deadzone = self._settings_block(
             content_layout,
             "跟鱼死区",
-            "数值越小，鱼漂偏离时越快按键追赶；过低可能导致左右频繁抖动。",
+            "数值越小，游标出现约 1 像素偏离就会更快按键追赶；最低档会更频繁左右修正。",
             self.config.get("deadzone_threshold", 1),
             1,
             15,

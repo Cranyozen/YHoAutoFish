@@ -83,22 +83,23 @@ class StateMachine:
         self.config = config or {
             "t_hold": 5,        # 安全区内重新触发按键的阈值
             "t_deadzone": 1,    # 追赶触发死区
-            "tracking_strength": 170,
+            "tracking_strength": 180,
             "debug_mode": False,
             "cast_animation_delay": 2,
             "settlement_close_delay": 1,
             "bar_missing_timeout": 3,
+            "pre_control_timeout": 14,
             "hook_wait_timeout": 90,
             "recovery_timeout": 8,
             "fishing_result_check_interval": 0.65,
             "fishing_failed_check_interval": 1.25,
-            "empty_ready_confirm_delay": 0.9,
-            "feed_forward_gain": 0.24,
-            "safe_zone_ratio": 0.10,
-            "control_release_cross_ratio": 0.035,
-            "control_reengage_ratio": 0.065,
-            "control_switch_ratio": 0.11,
-            "control_min_hold_time": 0.12,
+            "empty_ready_confirm_delay": 0.45,
+            "feed_forward_gain": 0.18,
+            "safe_zone_ratio": 0.08,
+            "control_release_cross_ratio": 0.012,
+            "control_reengage_ratio": 0.018,
+            "control_switch_ratio": 0.08,
+            "control_min_hold_time": 0.14,
         }
         self._asset_template_cache = {}
         
@@ -308,11 +309,11 @@ class StateMachine:
 
     def _normalize_tracking_strength(self):
         try:
-            raw_value = float(self.config.get("tracking_strength", 170))
+            raw_value = float(self.config.get("tracking_strength", 180))
         except (TypeError, ValueError):
-            raw_value = 170.0
+            raw_value = 180.0
         strength = raw_value / 100.0 if raw_value > 5 else raw_value
-        return max(0.70, min(strength, 1.80))
+        return max(0.70, min(strength, 2.40))
 
     def _normalize_ratio_config(self, key, default, minimum, maximum):
         try:
@@ -352,6 +353,9 @@ class StateMachine:
         self._bar_first_seen_time = 0
         self._last_bar_seen_time = 0
         self._fishing_bar_confirmed_time = 0
+        self._fishing_control_started = False
+        self._fishing_control_started_time = 0
+        self._fishing_control_frame_count = 0
         self._round_had_fishing_bar = False
         self._result_empty_recorded = False
         self._result_quick_check_last = 0
@@ -395,6 +399,9 @@ class StateMachine:
         self._bar_first_seen_time = 0
         self._last_bar_seen_time = 0
         self._fishing_bar_confirmed_time = 0
+        self._fishing_control_started = False
+        self._fishing_control_started_time = 0
+        self._fishing_control_frame_count = 0
         self._round_had_fishing_bar = False
         self._result_empty_recorded = False
         self._result_quick_check_last = 0
@@ -665,6 +672,12 @@ class StateMachine:
         previous_w = getattr(self, "_last_valid_target_w", None) or target_w
         previous_time = getattr(self, "_last_valid_bar_time", 0)
         if previous_x is not None and previous_time and now - previous_time <= 0.9:
+            width_jump_limit = max(int(roi_width * 0.42), int(previous_w * 2.25), 120)
+            if target_w > width_jump_limit:
+                self._bar_jump_reject_count = int(getattr(self, "_bar_jump_reject_count", 0)) + 1
+                if now - previous_time <= 0.75:
+                    return previous_x, cursor_x, previous_w, max(0.0, confidence * 0.55)
+                return None, cursor_x, target_w, confidence
             jump = abs(target_x - previous_x)
             jump_limit = max(56, int(roi_width * 0.18), int(max(previous_w, target_w) * 1.55))
             if jump > jump_limit and confidence < 0.82:
@@ -682,15 +695,67 @@ class StateMachine:
         self._bar_cursor_jump_reject_count = 0
         return target_x, cursor_x, target_w, confidence
 
+    def _bar_local_to_client_x(self, rect, roi, target_x, cursor_x):
+        """把不同溜鱼 ROI 内的局部 x 坐标统一到客户区 x 坐标。"""
+        if not rect or not roi:
+            return target_x, cursor_x
+        roi_left = int(rect[2] * roi[0])
+        converted_target = None if target_x is None else int(round(roi_left + float(target_x)))
+        converted_cursor = None if cursor_x is None else int(round(roi_left + float(cursor_x)))
+        return converted_target, converted_cursor
+
+    def _analyze_fishing_bar_roi(self, rect, roi):
+        bar_img = self.sc.capture_relative(rect, *roi)
+        if bar_img is None:
+            return None
+
+        target_x, cursor_x, target_w, debug_img, confidence = self.vis.analyze_fishing_bar(
+            bar_img,
+            cursor_template_paths=self._cursor_templates(),
+            cursor_scale_range=self._template_scale_range(rect, 0.70, 1.55),
+            cursor_scale_steps=5,
+        )
+        target_x, cursor_x = self._bar_local_to_client_x(rect, roi, target_x, cursor_x)
+        return {
+            "target_x": target_x,
+            "cursor_x": cursor_x,
+            "target_w": target_w,
+            "debug_img": debug_img,
+            "confidence": float(confidence or 0.0),
+            "width": bar_img.shape[1],
+            "roi": roi,
+        }
+
+    def _select_fishing_bar_detection(self, rect, primary_roi):
+        primary = self._analyze_fishing_bar_roi(rect, primary_roi)
+        if primary is None:
+            return None, None, None, None, 0.0
+
+        target_x, cursor_x, target_w, confidence = self._filter_bar_detection(
+            primary.get("target_x"),
+            primary.get("cursor_x"),
+            primary.get("target_w"),
+            primary.get("confidence"),
+            primary.get("width") or int(rect[2] * primary_roi[2]),
+        )
+        return target_x, cursor_x, target_w, primary.get("debug_img"), confidence
+
     def _control_pixels(self, target_w):
         width = max(1.0, float(target_w or 0))
-        release_cross = width * self._normalize_ratio_config("control_release_cross_ratio", 0.035, 0.015, 0.12)
-        reengage = width * self._normalize_ratio_config("control_reengage_ratio", 0.065, 0.025, 0.18)
-        switch_error = width * self._normalize_ratio_config("control_switch_ratio", 0.11, 0.05, 0.25)
+        release_cross = width * self._normalize_ratio_config("control_release_cross_ratio", 0.012, 0.006, 0.12)
+        reengage = width * self._normalize_ratio_config("control_reengage_ratio", 0.018, 0.008, 0.18)
+        switch_error = width * self._normalize_ratio_config("control_switch_ratio", 0.08, 0.035, 0.25)
+        try:
+            deadzone_pixels = float(self.config.get("t_deadzone", 1))
+        except (TypeError, ValueError):
+            deadzone_pixels = 1.0
+        deadzone_pixels = max(0.4, min(deadzone_pixels, 30.0))
+        release_cross = min(release_cross, max(0.35, deadzone_pixels * 0.55))
+        reengage = min(reengage, max(0.60, deadzone_pixels * 0.95))
         return {
-            "release_cross": max(1.5, min(release_cross, 8.0)),
-            "reengage": max(3.0, min(reengage, 14.0)),
-            "switch_error": max(5.0, min(switch_error, 24.0)),
+            "release_cross": max(0.35, min(release_cross, 8.0)),
+            "reengage": max(0.60, min(reengage, 14.0)),
+            "switch_error": max(3.0, min(switch_error, 24.0)),
         }
 
     def _choose_fishing_control_direction(self, error, target_w, target_velocity, total_signal, engage_threshold):
@@ -700,7 +765,8 @@ class StateMachine:
             current = 0
 
         now = time.time()
-        signed_error = float(error) * current if current else 0.0
+        error = float(error)
+        signed_error = error * current if current else 0.0
 
         if current:
             if signed_error <= -pixels["switch_error"]:
@@ -711,7 +777,7 @@ class StateMachine:
                 return 0
             return current
 
-        abs_error = abs(float(error))
+        abs_error = abs(error)
         abs_signal = abs(float(total_signal))
         if abs_error >= pixels["reengage"]:
             return 1 if error > 0 else -1
@@ -732,7 +798,7 @@ class StateMachine:
             if direction != previous:
                 self._fish_control_last_change = now
                 if direction:
-                    hold_time = self._normalize_ratio_config("control_min_hold_time", 0.12, 0.03, 0.35)
+                    hold_time = self._normalize_ratio_config("control_min_hold_time", 0.14, 0.03, 0.35)
                     self._fish_control_min_hold_until = now + hold_time
                 else:
                     self._fish_control_min_hold_until = 0
@@ -1760,51 +1826,11 @@ class StateMachine:
             self.current_state = self.STATE_RESULT
             return
 
-        if elapsed >= 1.0 and self._check_result_signals_during_fishing(rect, elapsed):
+        recent_bar_seen = getattr(self, '_last_bar_seen_time', 0) and (time.time() - getattr(self, '_last_bar_seen_time', 0) <= 0.35)
+        if elapsed >= 1.0 and not getattr(self, '_confirmed_fishing_bar', False) and not recent_bar_seen and self._check_terminal_result_before_bar(rect, elapsed):
             return
 
-        # 截取耐力条 ROI
-        bar_img = self.sc.capture_relative(rect, *roi)
-        if bar_img is None: return
-        
-        target_x, cursor_x, target_w, debug_img, bar_confidence = self.vis.analyze_fishing_bar(
-            bar_img,
-            cursor_template_paths=self._cursor_templates(),
-            cursor_scale_range=self._template_scale_range(rect, 0.70, 1.55),
-            cursor_scale_steps=5,
-        )
-        target_x, cursor_x, target_w, bar_confidence = self._filter_bar_detection(
-            target_x,
-            cursor_x,
-            target_w,
-            bar_confidence,
-            bar_img.shape[1],
-        )
-        if (target_x is None or cursor_x is None) and not getattr(self, '_seen_fishing_bar', False):
-            fallback_roi = (0.25, 0.035, 0.50, 0.075)
-            fallback_img = self.sc.capture_relative(rect, *fallback_roi)
-            if fallback_img is not None:
-                fb_target_x, fb_cursor_x, fb_target_w, fb_debug_img, fb_confidence = self.vis.analyze_fishing_bar(
-                    fallback_img,
-                    cursor_template_paths=self._cursor_templates(),
-                    cursor_scale_range=self._template_scale_range(rect, 0.70, 1.55),
-                    cursor_scale_steps=5,
-                )
-                fb_target_x, fb_cursor_x, fb_target_w, fb_confidence = self._filter_bar_detection(
-                    fb_target_x,
-                    fb_cursor_x,
-                    fb_target_w,
-                    fb_confidence,
-                    fallback_img.shape[1],
-                )
-                if fb_target_x is not None and fb_cursor_x is not None:
-                    target_x, cursor_x, target_w, debug_img, bar_confidence = (
-                        fb_target_x,
-                        fb_cursor_x,
-                        fb_target_w,
-                        fb_debug_img,
-                        fb_confidence,
-                    )
+        target_x, cursor_x, target_w, debug_img, bar_confidence = self._select_fishing_bar_detection(rect, roi)
         
         # 性能优化：限制 Debug 图像的发送频率（一秒最多 10 帧），防止撑爆队列导致主线程阻塞
         if self.config.get("debug_mode", False) and debug_img is not None:
@@ -1821,6 +1847,23 @@ class StateMachine:
             self._fish_control_direction = 0
             self._fish_control_min_hold_until = 0
             
+            if not getattr(self, '_fishing_control_started', False):
+                last_seen_time = getattr(self, '_last_bar_seen_time', 0)
+                if last_seen_time and time.time() - last_seen_time > 0.55:
+                    self._bar_seen_streak = 0
+                    self._seen_fishing_bar = False
+                    self._confirmed_fishing_bar = False
+                    self._fishing_bar_confirmed_time = 0
+
+                transition_elapsed = time.time() - self._fishing_start_time
+                if transition_elapsed >= 1.0 and self._check_terminal_result_before_bar(rect, transition_elapsed):
+                    return
+                pre_control_timeout = max(10.0, min(float(self.config.get("pre_control_timeout", 14)), 30.0))
+                if transition_elapsed > pre_control_timeout:
+                    self._log(f"[溜鱼] 上钩后 {pre_control_timeout:.0f} 秒仍未进入有效溜鱼控制，进入恢复流程。")
+                    self._enter_recovering("上钩后长时间未进入有效溜鱼控制", record_empty=True, press_esc=True)
+                return
+
             if not getattr(self, '_confirmed_fishing_bar', False):
                 last_seen_time = getattr(self, '_last_bar_seen_time', 0)
                 if last_seen_time and time.time() - last_seen_time > 0.55:
@@ -1878,13 +1921,13 @@ class StateMachine:
         if not getattr(self, '_confirmed_fishing_bar', False) and self._bar_seen_streak >= 2:
             self._confirmed_fishing_bar = True
             self._fishing_bar_confirmed_time = now
-        self._round_had_fishing_bar = bool(getattr(self, '_confirmed_fishing_bar', False))
 
-        # === 核心追踪算法 (自适应非线性 PID + 前馈控制) ===
+        # === 核心追踪算法：直接误差 + 滞回保持 ===
+        # A/D 是离散按键，不是连续舵量；真实游戏里视觉速度噪声较大，
+        # 因此控制方向只使用当前可靠位置，避免速度预测把方向带偏。
         error = target_x - cursor_x
         abs_error = abs(error)
-        
-        # 计算目标移动速度 (前馈预测)
+
         now = time.time()
         if getattr(self, '_last_target_time', 0) == 0:
             self._last_target_x = target_x
@@ -1893,35 +1936,31 @@ class StateMachine:
         else:
             dt = now - self._last_target_time
             if dt > 0.001:
-                # 简单低通滤波平滑速度，防止图像抖动导致速度突变
                 raw_velocity = (target_x - self._last_target_x) / dt
                 old_velocity = getattr(self, '_target_velocity', 0)
-                target_velocity = old_velocity * 0.6 + raw_velocity * 0.4
+                target_velocity = old_velocity * 0.70 + raw_velocity * 0.30
             else:
                 target_velocity = getattr(self, '_target_velocity', 0)
-                
             self._last_target_x = target_x
             self._last_target_time = now
             self._target_velocity = target_velocity
             
         # 动态安全区：低级鱼竿容错更小，默认更积极追赶。
-        safe_zone_ratio = self._normalize_ratio_config("safe_zone_ratio", 0.10, 0.06, 0.28)
+        safe_zone_ratio = self._normalize_ratio_config("safe_zone_ratio", 0.08, 0.04, 0.28)
         safe_zone = target_w * safe_zone_ratio if target_w else 8
         
         # PID 控制器计算基础偏差修正力
         tracking_strength = self._normalize_tracking_strength()
         control_signal = self.pid.update(error) * tracking_strength
         
-        # 引入前馈控制 (Feed-Forward)
-        # 目标移动得越快，我们需要提前施加的同向“力”就越大
-        ff_gain = self._normalize_ratio_config("feed_forward_gain", 0.24, 0.05, 0.50) * tracking_strength
+        ff_gain = self._normalize_ratio_config("feed_forward_gain", 0.18, 0.0, 0.45) * tracking_strength
         total_signal = control_signal + target_velocity * ff_gain
 
         # --- 纯非阻塞高频按键控制 ---
         # 动态阈值：
         # 如果游标在安全区内且目标没有高速移动，我们提高触发阈值，释放按键让游标自然滑动，避免左右鬼畜抽搐
         # 如果游标偏离或者目标正在高速逃离，我们降低阈值，要求立即按键追赶
-        is_safe = (abs_error <= safe_zone) and (abs(target_velocity) < 80)
+        is_safe = (abs_error <= safe_zone) and (abs(target_velocity) < 90)
         hold_threshold = max(2, min(int(self.config.get("t_hold", 5)), 60))
         deadzone_threshold = max(1, min(int(self.config.get("t_deadzone", 1)), 30))
         threshold = hold_threshold if is_safe else deadzone_threshold
@@ -1933,6 +1972,12 @@ class StateMachine:
             total_signal,
             threshold,
         )
+        if direction:
+            self._fishing_control_frame_count = int(getattr(self, "_fishing_control_frame_count", 0)) + 1
+            if not getattr(self, "_fishing_control_started", False):
+                self._fishing_control_started = True
+                self._fishing_control_started_time = time.time()
+            self._round_had_fishing_bar = True
         self._apply_fishing_control_direction(direction)
 
     def _detect_failed_result(self, rect):
@@ -2016,19 +2061,24 @@ class StateMachine:
             self._success_close_prompt_templates(),
             (
                 (0.22, 0.76, 0.56, 0.20),
+                (0.18, 0.74, 0.64, 0.24),
             ),
             (
-                {"name": "close-fast-edge", "threshold": 0.68, "use_edge": True},
+                {"name": "close-fast-edge", "threshold": 0.66, "use_edge": True},
+                {"name": "close-fast-plain", "threshold": 0.74},
             ),
-            threshold=0.68,
-            low_factor=0.70,
-            high_factor=1.35,
-            scale_steps=5,
+            threshold=0.66,
+            low_factor=0.62,
+            high_factor=1.50,
+            scale_steps=7,
         )
         if not close_info or not close_info.get("location"):
             return None
 
         success_signals = [close_info]
+        if close_info.get("confidence", 0.0) >= 0.88:
+            return self._build_success_result_info(success_signals)
+
         weight_info = self._match_result_signal(
             rect,
             "重量单位 g",
@@ -2262,7 +2312,8 @@ class StateMachine:
 
     def _round_fishing_elapsed(self):
         start_time = (
-            getattr(self, "_fishing_bar_confirmed_time", 0)
+            getattr(self, "_fishing_control_started_time", 0)
+            or getattr(self, "_fishing_bar_confirmed_time", 0)
             or getattr(self, "fishing_start_time", 0)
             or getattr(self, "_fishing_start_time", 0)
         )
@@ -2273,6 +2324,16 @@ class StateMachine:
     def _confirm_empty_ready_result(self, rect, ready_info, source_label="结算"):
         if not ready_info or not ready_info.get("location"):
             return False
+
+        success_info = self._detect_fast_success_result(rect)
+        if success_info and success_info.get("location"):
+            self._finish_fast_success_result(rect, success_info, source_label=source_label)
+            return True
+
+        failed_info = self._detect_fast_failed_result(rect)
+        if failed_info and failed_info.get("location"):
+            self._finish_failed_result(failed_info, source_label=source_label)
+            return True
 
         if not getattr(self, "_round_had_fishing_bar", False):
             self._finish_empty_ready_result(ready_info, source_label=source_label)
@@ -2289,18 +2350,18 @@ class StateMachine:
             return False
 
         self._result_ready_confirm_count += 1
-        confirm_delay = self._normalize_ratio_config("empty_ready_confirm_delay", 0.9, 0.6, 3.0)
-        if now - self._result_ready_seen_time < confirm_delay or self._result_ready_confirm_count < 3:
+        confirm_delay = self._normalize_ratio_config("empty_ready_confirm_delay", 0.45, 0.25, 3.0)
+        if now - self._result_ready_seen_time < confirm_delay or self._result_ready_confirm_count < 2:
             return False
 
-        failed_info = self._detect_fast_failed_result(rect)
-        if failed_info and failed_info.get("location"):
-            self._finish_failed_result(failed_info, source_label=source_label)
-            return True
-
-        success_info = self._detect_fast_success_result(rect)
+        success_info = self._detect_success_result(rect)
         if success_info and success_info.get("location"):
             self._finish_fast_success_result(rect, success_info, source_label=source_label)
+            return True
+
+        failed_info = self._detect_failed_result(rect)
+        if failed_info and failed_info.get("location"):
+            self._finish_failed_result(failed_info, source_label=source_label)
             return True
 
         if getattr(self, "_round_had_fishing_bar", False):
@@ -2359,35 +2420,36 @@ class StateMachine:
 
     def _check_result_signals_after_bar_missing(self, rect, missing_elapsed):
         now = time.time()
-        interval = 0.18 if missing_elapsed < 1.5 else 0.35
+        interval = 0.12 if missing_elapsed < 1.5 else 0.22
         if now - getattr(self, "_result_quick_check_last", 0) < interval:
             return False
         self._result_quick_check_last = now
-
-        failed_info = self._detect_fast_failed_result(rect)
-        if failed_info and failed_info.get("location"):
-            self._finish_failed_result(failed_info, source_label="溜鱼")
-            return True
 
         success_info = self._detect_fast_success_result(rect)
         if success_info and success_info.get("location"):
             self._finish_fast_success_result(rect, success_info, source_label="溜鱼")
             return True
 
-        full_interval = 0.9 if missing_elapsed < 2.0 else 1.4
+        failed_info = self._detect_fast_failed_result(rect)
+        if failed_info and failed_info.get("location"):
+            self._finish_failed_result(failed_info, source_label="溜鱼")
+            return True
+
+        full_interval = 0.35 if missing_elapsed < 2.0 else 0.55
         if now - getattr(self, "_result_full_check_last", 0) >= full_interval:
             self._result_full_check_last = now
-            failed_info = self._detect_failed_result(rect)
-            if failed_info and failed_info.get("location"):
-                self._finish_failed_result(failed_info, source_label="溜鱼")
-                return True
-
             success_info = self._detect_success_result(rect)
             if success_info and success_info.get("location"):
                 self._finish_fast_success_result(rect, success_info, source_label="溜鱼")
                 return True
 
-        if missing_elapsed >= 0.30:
+            failed_info = self._detect_failed_result(rect)
+            if failed_info and failed_info.get("location"):
+                self._finish_failed_result(failed_info, source_label="溜鱼")
+                return True
+
+        ready_check_delay = 1.15 if getattr(self, "_round_had_fishing_bar", False) else 0.45
+        if missing_elapsed >= ready_check_delay:
             ready_info = self._detect_ready_to_cast(rect, allow_heavy=False, require_initial_controls=True)
             if ready_info and ready_info.get("location"):
                 return self._confirm_empty_ready_result(rect, ready_info, source_label="溜鱼")
