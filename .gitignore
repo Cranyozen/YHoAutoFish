@@ -38,3 +38,16 @@ release/
 # OS/editor noise
 .DS_Store
 Thumbs.db
+
+# Environments
+.env
+.envrc
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Debug file
+debug*
