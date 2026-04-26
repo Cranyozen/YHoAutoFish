@@ -284,6 +284,13 @@ class StateMachine:
             required_keywords=("溜鱼", "游标"),
         )
 
+    def _target_bar_templates(self):
+        return self._resolve_asset_templates(
+            "fishing_target_bar",
+            exact_names=("溜鱼耐力条1.png",),
+            required_keywords=("溜鱼", "耐力条"),
+        )
+
     def _template_scale_range(self, rect, low_factor=0.65, high_factor=1.45):
         if not rect:
             base_scale = 1.0
@@ -343,6 +350,7 @@ class StateMachine:
         self._last_valid_bar_time = 0
         self._last_valid_cursor_x = None
         self._last_valid_cursor_time = 0
+        self._last_cursor_template_time = 0
         self._bar_cursor_jump_reject_count = 0
         self._bar_jump_reject_count = 0
         self._fish_control_direction = 0
@@ -356,6 +364,10 @@ class StateMachine:
         self._fishing_control_started = False
         self._fishing_control_started_time = 0
         self._fishing_control_frame_count = 0
+        self._capture_missing_start_time = 0
+        self._last_bar_capture_failed = False
+        self._last_control_error = 0
+        self._last_control_target_w = None
         self._round_had_fishing_bar = False
         self._result_empty_recorded = False
         self._result_quick_check_last = 0
@@ -389,6 +401,7 @@ class StateMachine:
         self._last_valid_bar_time = 0
         self._last_valid_cursor_x = None
         self._last_valid_cursor_time = 0
+        self._last_cursor_template_time = 0
         self._bar_cursor_jump_reject_count = 0
         self._bar_jump_reject_count = 0
         self._fish_control_direction = 0
@@ -402,6 +415,10 @@ class StateMachine:
         self._fishing_control_started = False
         self._fishing_control_started_time = 0
         self._fishing_control_frame_count = 0
+        self._capture_missing_start_time = 0
+        self._last_bar_capture_failed = False
+        self._last_control_error = 0
+        self._last_control_target_w = None
         self._round_had_fishing_bar = False
         self._result_empty_recorded = False
         self._result_quick_check_last = 0
@@ -640,7 +657,7 @@ class StateMachine:
         now = time.time()
         if target_x is None or cursor_x is None or target_w is None:
             previous_time = getattr(self, "_last_valid_bar_time", 0)
-            if previous_time and now - previous_time <= 0.35:
+            if previous_time and now - previous_time <= 0.70:
                 fallback_target = self._last_valid_target_x if target_x is None else target_x
                 fallback_cursor = self._last_valid_cursor_x if cursor_x is None else cursor_x
                 fallback_width = self._last_valid_target_w if target_w is None else target_w
@@ -651,8 +668,9 @@ class StateMachine:
         min_confidence = self._normalize_ratio_config("bar_confidence_threshold", 0.45, 0.25, 0.85)
         if confidence < min_confidence:
             previous_time = getattr(self, "_last_valid_bar_time", 0)
-            if previous_time and now - previous_time <= 0.45:
-                return self._last_valid_target_x, cursor_x, self._last_valid_target_w, confidence
+            if previous_time and now - previous_time <= 0.70:
+                fallback_cursor = self._last_valid_cursor_x if cursor_x is None else cursor_x
+                return self._last_valid_target_x, fallback_cursor, self._last_valid_target_w, confidence
             return None, cursor_x, target_w, confidence
 
         previous_cursor_x = getattr(self, "_last_valid_cursor_x", None)
@@ -704,16 +722,50 @@ class StateMachine:
         converted_cursor = None if cursor_x is None else int(round(roi_left + float(cursor_x)))
         return converted_target, converted_cursor
 
-    def _analyze_fishing_bar_roi(self, rect, roi):
+    def _should_draw_fishing_debug_frame(self):
+        if not self.config.get("debug_mode", False):
+            return False
+        if self.debug_queue is None or self.debug_queue.qsize() >= 2:
+            return False
+        now = time.time()
+        return getattr(self, "_last_debug_time", 0) == 0 or (now - self._last_debug_time) >= 0.25
+
+    def _cursor_templates_for_current_frame(self):
+        now = time.time()
+        if getattr(self, "_fishing_control_started", False) or getattr(self, "_confirmed_fishing_bar", False):
+            return None
+        recent_cursor_time = getattr(self, "_last_valid_cursor_time", 0)
+        if recent_cursor_time and now - recent_cursor_time <= 1.20:
+            return None
+        last_template_time = getattr(self, "_last_cursor_template_time", 0)
+        if last_template_time and now - last_template_time < 0.80:
+            return None
+        self._last_cursor_template_time = now
+        return self._cursor_templates()
+
+    def _analyze_fishing_bar_roi(self, rect, roi, draw_debug=False):
         bar_img = self.sc.capture_relative(rect, *roi)
         if bar_img is None:
-            return None
+            return {
+                "target_x": None,
+                "cursor_x": None,
+                "target_w": None,
+                "debug_img": None,
+                "confidence": 0.0,
+                "width": int(rect[2] * roi[2]) if rect else 0,
+                "roi": roi,
+                "capture_failed": True,
+            }
 
         target_x, cursor_x, target_w, debug_img, confidence = self.vis.analyze_fishing_bar(
             bar_img,
-            cursor_template_paths=self._cursor_templates(),
+            cursor_template_paths=self._cursor_templates_for_current_frame(),
+            target_template_paths=self._target_bar_templates(),
             cursor_scale_range=self._template_scale_range(rect, 0.70, 1.55),
             cursor_scale_steps=5,
+            target_scale_range=self._template_scale_range(rect, 0.70, 1.30),
+            target_scale_steps=3,
+            draw_debug=draw_debug,
         )
         target_x, cursor_x = self._bar_local_to_client_x(rect, roi, target_x, cursor_x)
         return {
@@ -724,11 +776,20 @@ class StateMachine:
             "confidence": float(confidence or 0.0),
             "width": bar_img.shape[1],
             "roi": roi,
+            "capture_failed": False,
         }
 
     def _select_fishing_bar_detection(self, rect, primary_roi):
-        primary = self._analyze_fishing_bar_roi(rect, primary_roi)
+        self._last_bar_capture_failed = False
+        primary = self._analyze_fishing_bar_roi(
+            rect,
+            primary_roi,
+            draw_debug=self._should_draw_fishing_debug_frame(),
+        )
         if primary is None:
+            return None, None, None, None, 0.0
+        if primary.get("capture_failed"):
+            self._last_bar_capture_failed = True
             return None, None, None, None, 0.0
 
         target_x, cursor_x, target_w, confidence = self._filter_bar_detection(
@@ -812,6 +873,29 @@ class StateMachine:
                 self.ctrl.key_down('A')
             else:
                 self.ctrl.release_all()
+
+    def _hold_recent_fishing_control_on_gap(self):
+        """短时截图/识别断帧时保持当前 A/D，避免白天高亮环境下游标停住。"""
+        if not getattr(self, "_fishing_control_started", False):
+            return False
+
+        now = time.time()
+        last_valid_time = getattr(self, "_last_valid_bar_time", 0)
+        if not last_valid_time or now - last_valid_time > 0.55:
+            return False
+
+        current_direction = int(getattr(self, "_fish_control_direction", 0) or 0)
+        if current_direction == 0:
+            last_error = float(getattr(self, "_last_control_error", 0) or 0)
+            target_w = getattr(self, "_last_control_target_w", None) or getattr(self, "_last_valid_target_w", None) or 80
+            if abs(last_error) >= max(0.8, min(float(target_w) * 0.012, 4.0)):
+                current_direction = 1 if last_error > 0 else -1
+
+        if current_direction == 0:
+            return False
+
+        self._apply_fishing_control_direction(current_direction)
+        return True
 
     def _default_ocr_root(self, package_name):
         appdata = os.environ.get("APPDATA")
@@ -1835,13 +1919,28 @@ class StateMachine:
         # 性能优化：限制 Debug 图像的发送频率（一秒最多 10 帧），防止撑爆队列导致主线程阻塞
         if self.config.get("debug_mode", False) and debug_img is not None:
             now = time.time()
-            if getattr(self, '_last_debug_time', 0) == 0 or (now - self._last_debug_time) > 0.1:
-                if self.debug_queue and self.debug_queue.qsize() < 2:
+            if getattr(self, '_last_debug_time', 0) == 0 or (now - self._last_debug_time) >= 0.25:
+                if self.debug_queue is not None and self.debug_queue.qsize() < 2:
                     self.debug_queue.put(debug_img)
                 self._last_debug_time = now
 
         # 判断是否结束 (无论是成功还是鱼儿溜走，耐力条都会消失)
         if target_x is None or cursor_x is None:
+            if getattr(self, "_last_bar_capture_failed", False):
+                if getattr(self, "_capture_missing_start_time", 0) == 0:
+                    self._capture_missing_start_time = time.time()
+                capture_missing_elapsed = time.time() - self._capture_missing_start_time
+                if capture_missing_elapsed <= 0.55:
+                    if not self._hold_recent_fishing_control_on_gap():
+                        self.ctrl.release_all()
+                        self._fish_control_direction = 0
+                        self._fish_control_min_hold_until = 0
+                    return
+                self._capture_missing_start_time = 0
+
+            if self._hold_recent_fishing_control_on_gap():
+                return
+
             # 安全保护：如果丢失目标，立刻释放所有按键，防止游标因为惯性飞出界
             self.ctrl.release_all()
             self._fish_control_direction = 0
@@ -1905,6 +2004,7 @@ class StateMachine:
         
         # 识别到了，重置丢失计时器，并标记已经看到过耐力条
         self._missing_start_time = 0
+        self._capture_missing_start_time = 0
         self._result_quick_check_last = 0
         self._result_full_check_last = 0
         self._clear_result_ready_candidate()
@@ -1927,6 +2027,8 @@ class StateMachine:
         # 因此控制方向只使用当前可靠位置，避免速度预测把方向带偏。
         error = target_x - cursor_x
         abs_error = abs(error)
+        self._last_control_error = error
+        self._last_control_target_w = target_w
 
         now = time.time()
         if getattr(self, '_last_target_time', 0) == 0:

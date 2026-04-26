@@ -9,13 +9,46 @@ class ScreenCapture:
     def __init__(self):
         # 放弃全局单例，改为每个线程拥有自己独立的 mss 实例
         # 这样在线程销毁时，可以安全地释放对应的系统 GDI 句柄
-        self.sct = mss.mss()
+        self.sct = None
+        self._failure_count = 0
+        self._last_error_log_time = 0
+        self._recreate_sct()
+
+    def _new_mss(self):
+        return mss.mss()
+
+    def _recreate_sct(self):
+        old_sct = getattr(self, "sct", None)
+        if old_sct is not None:
+            try:
+                old_sct.close()
+            except Exception:
+                pass
+        self.sct = None
+        try:
+            self.sct = self._new_mss()
+            return True
+        except Exception as exc:
+            self._log_capture_error("初始化 mss 截图后端失败", exc)
+            return False
+
+    def _log_capture_error(self, prefix, exc):
+        self._failure_count += 1
+        now = time.time()
+        should_log = self._failure_count <= 3 or now - self._last_error_log_time >= 2.0
+        if should_log:
+            print(f"[ScreenCapture] {prefix}: {exc} (连续失败 {self._failure_count} 次，正在重建截图句柄)")
+            self._last_error_log_time = now
         
     def close(self):
         """显式释放 mss 占用的系统 GDI 句柄资源"""
-        if hasattr(self, 'sct') and self.sct:
-            self.sct.close()
-            self.sct = None
+        sct = getattr(self, "sct", None)
+        if sct is not None:
+            try:
+                sct.close()
+            except Exception:
+                pass
+        self.sct = None
             
     def capture_roi(self, left, top, width, height):
         """
@@ -34,23 +67,30 @@ class ScreenCapture:
             "height": int(height)
         }
         
-        try:
-            sct_img = self.sct.grab(monitor)
-            # mss 返回的是 BGRA，转换为 BGR
-            img = np.array(sct_img)[:, :, :3]
-            # mss grab 返回的 np.array 默认是只读的，如果要用 cv2 处理建议 copy
-            return np.copy(img)
-        except mss.exception.ScreenShotError as e:
-            # 捕获 BitBlt 或 SelectObject 异常：这通常发生在游戏切换全屏、窗口被强制覆盖或系统资源短暂枯竭时
-            print(f"[ScreenCapture] mss 截图异常 (系统绘图失败): {e}")
-            # 极其重要：在发生底层绘图错误时，必须强制休眠一小段时间，
-            # 否则死循环会瞬间产生成千上万个异常，导致整个 Python 进程崩溃
-            time.sleep(0.1)
-            return None
-        except Exception as e:
-            print(f"[ScreenCapture] 未知截图异常: {e}")
-            time.sleep(0.1)
-            return None
+        for attempt in range(2):
+            if self.sct is None and not self._recreate_sct():
+                time.sleep(0.03)
+                return None
+
+            try:
+                sct_img = self.sct.grab(monitor)
+                # mss 返回的是 BGRA，转换为 BGR
+                img = np.array(sct_img)[:, :, :3]
+                # mss grab 返回的 np.array 默认是只读的，如果要用 cv2 处理建议 copy
+                self._failure_count = 0
+                return np.copy(img)
+            except mss.exception.ScreenShotError as e:
+                # SelectObject/BitBlt 失败通常意味着当前 mss/GDI 句柄已不稳定，立即重建后端并重试一次。
+                self._log_capture_error("mss 截图异常 (系统绘图失败)", e)
+                self._recreate_sct()
+            except Exception as e:
+                self._log_capture_error("未知截图异常", e)
+                self._recreate_sct()
+
+            if attempt == 0:
+                time.sleep(0.01)
+
+        return None
         
     def capture_relative(self, window_rect, rx, ry, rw, rh):
         """
@@ -78,8 +118,3 @@ class ScreenCapture:
         abs_height = max(1, int(w_height * rh))
         
         return abs_left, abs_top, abs_width, abs_height
-
-    def close(self):
-        """释放 mss 资源"""
-        if self.sct:
-            self.sct.close()

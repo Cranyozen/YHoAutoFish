@@ -285,8 +285,12 @@ class VisionCore:
         self,
         roi_img,
         cursor_template_paths=None,
+        target_template_paths=None,
         cursor_scale_range=None,
         cursor_scale_steps=5,
+        target_scale_range=None,
+        target_scale_steps=5,
+        draw_debug=True,
     ):
         """
         解析上方耐力条区域。
@@ -296,7 +300,7 @@ class VisionCore:
         if roi_img is None or roi_img.size == 0:
             return None, None, None, roi_img, 0.0
 
-        debug_img = roi_img.copy()
+        debug_img = roi_img.copy() if draw_debug else None
         roi_h, roi_w = roi_img.shape[:2]
         hsv = cv2.cvtColor(roi_img, cv2.COLOR_BGR2HSV)
 
@@ -346,7 +350,8 @@ class VisionCore:
                 cursor_candidates.append(template_cursor)
                 cursor = self._select_cursor_candidate(cursor_candidates, green_candidates, roi_w, roi_h)
         if cursor is None:
-            cv2.putText(debug_img, "cursor missing", (4, max(12, roi_h - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)
+            if debug_img is not None:
+                cv2.putText(debug_img, "cursor missing", (4, max(12, roi_h - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1)
             return None, None, None, debug_img, 0.0
 
         band_half = max(6, int(cursor["h"] * 0.85), int(roi_h * 0.22))
@@ -369,6 +374,8 @@ class VisionCore:
 
         target = self._select_green_bar_component(band_mask, roi_w, roi_h, band_y1, band_y2, cursor, hsv=hsv)
         if target is None:
+            target = self._select_split_green_bar_near_cursor(band_mask, cursor, roi_w, roi_h, hsv=hsv)
+        if target is None:
             relaxed_close_w = max(5, int(roi_w * 0.020))
             relaxed_band_mask = cv2.morphologyEx(relaxed_band_mask, cv2.MORPH_CLOSE, np.ones((3, relaxed_close_w), np.uint8))
             relaxed_band_mask = cv2.morphologyEx(relaxed_band_mask, cv2.MORPH_OPEN, np.ones((2, 3), np.uint8))
@@ -382,8 +389,27 @@ class VisionCore:
                 hsv=hsv,
                 relaxed=True,
             )
+            if target is None:
+                target = self._select_split_green_bar_near_cursor(
+                    relaxed_band_mask,
+                    cursor,
+                    roi_w,
+                    roi_h,
+                    hsv=hsv,
+                    relaxed=True,
+                )
         if target is None:
             target = self._select_green_candidate_near_cursor(green_candidates, cursor, roi_w, roi_h, hsv=hsv)
+        if target is None and target_template_paths:
+            target = self._target_bar_template_candidate(
+                roi_img,
+                target_template_paths or (),
+                cursor,
+                roi_w,
+                roi_h,
+                target_scale_range,
+                target_scale_steps,
+            )
 
         cursor_x = int(cursor["cx"])
         target_x = int(target["cx"]) if target else None
@@ -392,30 +418,31 @@ class VisionCore:
         if target:
             confidence = min(0.98, cursor["confidence"] * 0.42 + target["confidence"] * 0.58)
 
-        cv2.rectangle(debug_img, (0, band_y1), (roi_w - 1, max(band_y1, band_y2 - 1)), (255, 120, 0), 1)
-        cv2.rectangle(
-            debug_img,
-            (int(cursor["x"]), int(cursor["y"])),
-            (int(cursor["x"] + cursor["w"]), int(cursor["y"] + cursor["h"])),
-            (0, 255, 255),
-            1,
-        )
-        cv2.line(debug_img, (cursor_x, 0), (cursor_x, roi_h), (0, 255, 255), 2)
-        if target:
+        if debug_img is not None:
+            cv2.rectangle(debug_img, (0, band_y1), (roi_w - 1, max(band_y1, band_y2 - 1)), (255, 120, 0), 1)
             cv2.rectangle(
                 debug_img,
-                (int(target["x"]), int(target["y"])),
-                (int(target["x"] + target["w"]), int(target["y"] + target["h"])),
-                (0, 180, 0),
+                (int(cursor["x"]), int(cursor["y"])),
+                (int(cursor["x"] + cursor["w"]), int(cursor["y"] + cursor["h"])),
+                (0, 255, 255),
                 1,
             )
-            cv2.line(debug_img, (target_x, 0), (target_x, roi_h), (0, 255, 0), 2)
-        source = cursor.get("source", "color")
-        if target:
-            track_score = target.get("track_score", 0.0)
-            cv2.putText(debug_img, f"conf {confidence:.2f} {source} rail {track_score:.2f}", (4, max(12, roi_h - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
-        else:
-            cv2.putText(debug_img, f"conf {confidence:.2f} {source}", (4, max(12, roi_h - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+            cv2.line(debug_img, (cursor_x, 0), (cursor_x, roi_h), (0, 255, 255), 2)
+            if target:
+                cv2.rectangle(
+                    debug_img,
+                    (int(target["x"]), int(target["y"])),
+                    (int(target["x"] + target["w"]), int(target["y"] + target["h"])),
+                    (0, 180, 0),
+                    1,
+                )
+                cv2.line(debug_img, (target_x, 0), (target_x, roi_h), (0, 255, 0), 2)
+            source = cursor.get("source", "color")
+            if target:
+                track_score = target.get("track_score", 0.0)
+                cv2.putText(debug_img, f"conf {confidence:.2f} {source} rail {track_score:.2f}", (4, max(12, roi_h - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+            else:
+                cv2.putText(debug_img, f"conf {confidence:.2f} {source}", (4, max(12, roi_h - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
 
         return target_x, cursor_x, target_w, debug_img, confidence
 
@@ -464,6 +491,100 @@ class VisionCore:
             "confidence": max(0.0, min(0.98, float(conf))),
             "score": max(0.0, min(0.98, float(conf))),
             "source": "template",
+            "strategy": strategy,
+        }
+
+    def _target_bar_template_candidate(self, roi_img, target_template_paths, cursor, roi_w, roi_h, scale_range=None, scale_steps=5):
+        if not target_template_paths:
+            return None
+
+        strategies = (
+            {"name": "target-gray-mask", "threshold": 0.54, "use_mask": True, "mask_threshold": 6},
+        )
+        loc, conf, matched_path, strategy = self.find_best_template_multi_strategy(
+            roi_img,
+            target_template_paths,
+            strategies,
+            threshold=0.52,
+            scale_range=scale_range or (0.55, 1.35),
+            scale_steps=max(1, int(scale_steps)),
+        )
+        if loc is None:
+            return None
+
+        template = self._read_template(matched_path)
+        if template is not None:
+            template_h, template_w = template.shape[:2]
+        else:
+            template_h, template_w = max(4, int(roi_h * 0.42)), max(12, int(roi_w * 0.14))
+
+        scale_w = max(8.0, min(float(roi_w) * 0.42, float(template_w)))
+        scale_h = max(3.0, min(float(roi_h) * 0.45, float(template_h)))
+        cx, cy = float(loc[0]), float(loc[1])
+        if cursor is not None:
+            y_delta = abs(cy - float(cursor.get("cy", cy)))
+            if y_delta > max(5.0, roi_h * 0.16):
+                return None
+
+        w = int(round(scale_w))
+        h = int(round(scale_h))
+        x = int(round(cx - w / 2))
+        y = int(round(cy - h / 2))
+        x = max(0, min(max(0, roi_w - w), x))
+        y = max(0, min(max(0, roi_h - h), y))
+
+        hsv = cv2.cvtColor(roi_img, cv2.COLOR_BGR2HSV)
+        color_quality = self._bar_color_quality(hsv, x, y, w, h)
+        if color_quality < 0.42:
+            return None
+        hue = hsv[:, :, 0]
+        sat = hsv[:, :, 1]
+        val = hsv[:, :, 2]
+        target_like = (
+            (hue >= 48)
+            & (hue <= 102)
+            & (sat >= 125)
+            & (val >= 88)
+        )
+        bad_wide_rows = 0
+        checked_rows = 0
+        row_start = max(0, int(y))
+        row_end = min(roi_h, int(y + h))
+        center_col = max(0, min(roi_w - 1, int(round(cx))))
+        for row in range(row_start, row_end):
+            row_mask = target_like[row]
+            if not row_mask[center_col]:
+                continue
+            left = center_col
+            while left > 0 and row_mask[left - 1]:
+                left -= 1
+            right = center_col
+            while right < roi_w - 1 and row_mask[right + 1]:
+                right += 1
+            run_w = right - left + 1
+            checked_rows += 1
+            edge_touch = left <= 1 or right >= roi_w - 2
+            if (
+                run_w > max(roi_w * 0.44, w * 2.20)
+                or (edge_touch and run_w > max(roi_w * 0.22, w * 1.45))
+                or (left <= 1 and right >= roi_w - 2)
+            ):
+                bad_wide_rows += 1
+        if checked_rows and bad_wide_rows >= max(2, int(checked_rows * 0.45)):
+            return None
+
+        return {
+            "x": x,
+            "y": y,
+            "w": w,
+            "h": h,
+            "area": int(w * h),
+            "cx": cx,
+            "cy": cy,
+            "confidence": max(0.0, min(0.92, float(conf))),
+            "score": max(0.0, min(1.05, float(conf) + 0.10)),
+            "track_score": max(0.0, min(1.0, color_quality)),
+            "source": "target-template",
             "strategy": strategy,
         }
 
@@ -612,6 +733,330 @@ class VisionCore:
             cursor_score = 1.0 - min(1.0, y_delta / max(3.0, roi_h * 0.14))
 
         return max(0.0, min(1.0, balanced_dark * 0.46 + adjacent_dark * 0.18 + thin_score * 0.22 + cursor_score * 0.14))
+
+    def _bar_color_quality(self, hsv, x, y, w, h):
+        """评估候选区域是否像真实青绿色耐力条，而不是普通树林背景。"""
+        if hsv is None or w <= 0 or h <= 0:
+            return 0.0
+
+        roi_h, roi_w = hsv.shape[:2]
+        x1 = max(0, int(x))
+        y1 = max(0, int(y))
+        x2 = min(roi_w, int(x + w))
+        y2 = min(roi_h, int(y + h))
+        patch = hsv[y1:y2, x1:x2]
+        if patch.size == 0:
+            return 0.0
+
+        hue = patch[:, :, 0]
+        sat = patch[:, :, 1]
+        val = patch[:, :, 2]
+        cyan_green = (hue >= 48) & (hue <= 102) & (sat >= 135) & (val >= 96)
+        bright_core = (hue >= 56) & (hue <= 96) & (sat >= 155) & (val >= 108)
+        cyan_ratio = float(np.count_nonzero(cyan_green)) / float(cyan_green.size)
+        core_ratio = float(np.count_nonzero(bright_core)) / float(bright_core.size)
+        sat_score = min(1.0, max(0.0, (float(np.mean(sat)) - 45.0) / 120.0))
+        val_score = min(1.0, max(0.0, (float(np.mean(val)) - 75.0) / 115.0))
+        return max(0.0, min(1.0, cyan_ratio * 0.42 + core_ratio * 0.32 + sat_score * 0.14 + val_score * 0.12))
+
+    def _select_horizontal_run_green_bar(self, mask, cursor, roi_w, roi_h, hsv=None, relaxed=False):
+        if hsv is None or mask is None or cursor is None:
+            return None
+
+        cursor_cx = float(cursor.get("cx", 0.0))
+        cursor_cy = float(cursor.get("cy", roi_h * 0.5))
+        cursor_h = float(cursor.get("h", max(4, roi_h * 0.5)))
+        y_half = max(5, int(roi_h * (0.26 if relaxed else 0.22)), int(cursor_h * 0.45))
+        y1 = max(0, int(round(cursor_cy)) - y_half)
+        y2 = min(roi_h, int(round(cursor_cy)) + y_half + 1)
+        if y2 <= y1:
+            return None
+
+        hue = hsv[:, :, 0]
+        sat = hsv[:, :, 1]
+        val = hsv[:, :, 2]
+        target_like = (
+            (mask > 0)
+            & (hue >= 48)
+            & (hue <= 102)
+            & (sat >= (125 if relaxed else 135))
+            & (val >= (88 if relaxed else 96))
+        )
+
+        min_piece_w = max(8 if relaxed else 10, int(roi_w * (0.014 if relaxed else 0.018)))
+        min_full_w = max(32 if relaxed else 42, int(roi_w * (0.075 if relaxed else 0.095)))
+        max_full_w = max(min_full_w + 1, int(roi_w * (0.44 if relaxed else 0.38)))
+        gap_limit = max(12.0, roi_w * (0.085 if relaxed else 0.065), float(cursor.get("w", 4)) * 4.5)
+
+        row_candidates = []
+
+        def add_row_candidate(row, x1, x2, source):
+            width = int(x2 - x1 + 1)
+            if width < min_full_w or width > max_full_w:
+                return
+            if x1 <= 1 and x2 >= roi_w - 2:
+                return
+            cx = x1 + width / 2.0
+            center_score = 1.0 - min(1.0, abs(float(row) - cursor_cy) / max(1.0, roi_h * 0.28))
+            width_score = min(1.0, width / max(1.0, roi_w * 0.18))
+            color_quality = self._bar_color_quality(hsv, x1, row, width, 1)
+            if color_quality < (0.44 if relaxed else 0.52):
+                return
+            score = color_quality * 0.46 + width_score * 0.32 + center_score * 0.22
+            row_candidates.append({
+                "row": int(row),
+                "x1": int(x1),
+                "x2": int(x2),
+                "cx": float(cx),
+                "w": int(width),
+                "score": float(score),
+                "source": source,
+            })
+
+        for row in range(y1, y2):
+            xs = np.flatnonzero(target_like[row])
+            if xs.size == 0:
+                continue
+
+            runs = []
+            start = int(xs[0])
+            prev = int(xs[0])
+            for value in xs[1:]:
+                value = int(value)
+                if value == prev + 1:
+                    prev = value
+                    continue
+                if prev - start + 1 >= min_piece_w:
+                    runs.append((start, prev))
+                start = prev = value
+            if prev - start + 1 >= min_piece_w:
+                runs.append((start, prev))
+
+            if not runs:
+                continue
+
+            for run_x1, run_x2 in runs:
+                run_w = run_x2 - run_x1 + 1
+                cursor_inside = run_x1 + run_w * 0.10 <= cursor_cx <= run_x2 - run_w * 0.10
+                if run_w >= min_full_w and (cursor_inside or run_w >= int(roi_w * 0.13)):
+                    add_row_candidate(row, run_x1, run_x2, "row-single-color")
+
+            for left_index, left in enumerate(runs):
+                left_x1, left_x2 = left
+                if left_x1 > cursor_cx:
+                    continue
+                for right in runs[left_index + 1:]:
+                    right_x1, right_x2 = right
+                    if right_x2 < cursor_cx:
+                        continue
+                    gap = right_x1 - left_x2 - 1
+                    if gap < 0 or gap > gap_limit:
+                        continue
+                    x1 = min(left_x1, right_x1)
+                    x2 = max(left_x2, right_x2)
+                    if x1 - gap_limit * 0.25 <= cursor_cx <= x2 + gap_limit * 0.25:
+                        add_row_candidate(row, x1, x2, "row-split-color")
+
+        if not row_candidates:
+            return None
+
+        row_candidates.sort(key=lambda item: item["score"], reverse=True)
+        min_support = 2 if relaxed else 3
+        for base in row_candidates[:12]:
+            support = []
+            for item in row_candidates:
+                if abs(item["row"] - base["row"]) > max(3, int(roi_h * 0.26)):
+                    continue
+                if abs(item["cx"] - base["cx"]) > max(5.0, base["w"] * 0.12):
+                    continue
+                if abs(item["w"] - base["w"]) > max(10, int(base["w"] * 0.22)):
+                    continue
+                overlap = min(base["x2"], item["x2"]) - max(base["x1"], item["x1"]) + 1
+                if overlap / max(1, min(base["w"], item["w"])) < 0.62:
+                    continue
+                support.append(item)
+
+            if len(support) < min_support:
+                continue
+
+            support = sorted(support, key=lambda item: item["row"])
+            x1 = int(round(float(np.median([item["x1"] for item in support]))))
+            x2 = int(round(float(np.median([item["x2"] for item in support]))))
+            bar_y1 = support[0]["row"]
+            bar_y2 = support[-1]["row"] + 1
+            width = x2 - x1 + 1
+            height = max(2, bar_y2 - bar_y1)
+            color_quality = self._bar_color_quality(hsv, x1, bar_y1, width, height)
+            if color_quality < (0.44 if relaxed else 0.52):
+                continue
+
+            score_mean = sum(item["score"] for item in support) / len(support)
+            support_score = min(1.0, len(support) / max(3.0, roi_h * 0.32))
+            confidence = color_quality * 0.42 + min(1.0, width / max(1.0, roi_w * 0.18)) * 0.24 + support_score * 0.22 + score_mean * 0.12
+            return {
+                "x": int(x1),
+                "y": int(bar_y1),
+                "w": int(width),
+                "h": int(height),
+                "area": int(width * height),
+                "cx": float(x1 + width / 2.0),
+                "cy": float(bar_y1 + height / 2.0),
+                "confidence": max(0.0, min(0.92, confidence)),
+                "score": max(0.0, min(1.08, confidence + support_score * 0.10)),
+                "track_score": max(0.0, min(1.0, color_quality)),
+                "source": base["source"],
+            }
+
+        return None
+
+    def _select_split_green_bar_near_cursor(self, mask, cursor, roi_w, roi_h, hsv=None, relaxed=False):
+        """在游标同一水平带内合并被黄色游标切开的左右耐力条段。"""
+        if mask is None or cursor is None:
+            return None
+
+        run_candidate = self._select_horizontal_run_green_bar(mask, cursor, roi_w, roi_h, hsv=hsv, relaxed=relaxed)
+        if run_candidate is not None:
+            return run_candidate
+
+        work_mask = mask
+        if hsv is not None:
+            hue = hsv[:, :, 0]
+            sat = hsv[:, :, 1]
+            val = hsv[:, :, 2]
+            target_like = (
+                ((hue >= 48) & (hue <= 102) & (sat >= 135) & (val >= 96))
+                | ((hue >= 56) & (hue <= 96) & (sat >= 155) & (val >= 108))
+            )
+            strict_mask = np.zeros_like(mask)
+            strict_mask[(mask > 0) & target_like] = 255
+            if cv2.countNonZero(strict_mask) >= max(8, int(roi_w * roi_h * 0.00025)):
+                close_w = max(5, int(roi_w * (0.010 if relaxed else 0.008)))
+                work_mask = cv2.morphologyEx(strict_mask, cv2.MORPH_CLOSE, np.ones((3, close_w), np.uint8))
+                work_mask = cv2.morphologyEx(work_mask, cv2.MORPH_OPEN, np.ones((2, 3), np.uint8))
+
+        count, labels, stats, centroids = cv2.connectedComponentsWithStats(work_mask, 8)
+        pieces = []
+        cursor_cx = float(cursor.get("cx", 0.0))
+        cursor_cy = float(cursor.get("cy", roi_h * 0.5))
+        min_piece_w = max(8 if relaxed else 10, int(roi_w * (0.016 if relaxed else 0.020)))
+        min_full_w = max(28 if relaxed else 36, int(roi_w * (0.085 if relaxed else 0.105)))
+        max_full_w = max(min_full_w + 1, int(roi_w * (0.44 if relaxed else 0.38)))
+        max_h = max(6, int(roi_h * (0.62 if relaxed else 0.54)))
+        max_y_delta = max(4.5 if relaxed else 3.5, roi_h * (0.14 if relaxed else 0.105))
+
+        for index in range(1, count):
+            x, y, w, h, area = stats[index]
+            if w < min_piece_w or w > max_full_w or h < 2 or h > max_h:
+                continue
+            if area < max(6, int(roi_w * roi_h * 0.00022)):
+                continue
+            aspect = w / max(1, h)
+            if aspect < (1.35 if relaxed else 1.55):
+                continue
+            fill_ratio = area / max(1, w * h)
+            if fill_ratio < (0.08 if relaxed else 0.12):
+                continue
+            if x <= 1 and x + w >= roi_w - 1:
+                continue
+
+            cx, cy = centroids[index]
+            y_delta = abs(float(cy) - cursor_cy)
+            if y_delta > max_y_delta:
+                continue
+
+            color_quality = self._bar_color_quality(hsv, x, y, w, h)
+            if color_quality < (0.42 if relaxed else 0.50):
+                continue
+
+            pieces.append({
+                "x": int(x),
+                "y": int(y),
+                "w": int(w),
+                "h": int(h),
+                "area": int(area),
+                "cx": float(cx),
+                "cy": float(cy),
+                "fill_ratio": float(fill_ratio),
+                "color_quality": color_quality,
+            })
+
+        if not pieces:
+            return None
+
+        best = None
+
+        def make_candidate(x1, y1, x2, y2, area, color_quality, fill_ratio, source):
+            w = int(max(1, x2 - x1))
+            h = int(max(1, y2 - y1))
+            if w < min_full_w or w > max_full_w or h > max_h:
+                return None
+            cy = y1 + h / 2.0
+            y_score = 1.0 - min(1.0, abs(cy - cursor_cy) / max(1.0, roi_h * 0.22))
+            width_score = min(1.0, w / max(1.0, roi_w * 0.18))
+            height_score = 1.0 - min(1.0, max(0.0, h - roi_h * 0.50) / max(1.0, roi_h * 0.22))
+            confidence = color_quality * 0.34 + width_score * 0.24 + y_score * 0.22 + min(1.0, fill_ratio / 0.45) * 0.12 + height_score * 0.08
+            return {
+                "x": int(x1),
+                "y": int(y1),
+                "w": w,
+                "h": h,
+                "area": int(area),
+                "cx": float(x1 + w / 2.0),
+                "cy": float(cy),
+                "confidence": max(0.0, min(0.90, confidence)),
+                "score": max(0.0, min(1.05, confidence + width_score * 0.08 + color_quality * 0.08)),
+                "track_score": max(0.0, min(1.0, color_quality)),
+                "source": source,
+            }
+
+        gap_limit = max(18.0, roi_w * (0.10 if relaxed else 0.075), float(cursor.get("w", 4)) * 5.0)
+        for left in pieces:
+            left_x2 = left["x"] + left["w"]
+            if left["cx"] > cursor_cx + gap_limit * 0.35:
+                continue
+            for right in pieces:
+                if right is left or right["cx"] < cursor_cx - gap_limit * 0.35:
+                    continue
+                right_x1 = right["x"]
+                if right_x1 < left["x"]:
+                    continue
+                gap = max(0.0, right_x1 - left_x2)
+                if gap > gap_limit:
+                    continue
+                x1 = min(left["x"], right["x"])
+                x2 = max(left_x2, right["x"] + right["w"])
+                if not (x1 - gap_limit * 0.25 <= cursor_cx <= x2 + gap_limit * 0.25):
+                    continue
+                y1 = min(left["y"], right["y"])
+                y2 = max(left["y"] + left["h"], right["y"] + right["h"])
+                union_area = left["area"] + right["area"]
+                union_fill = union_area / max(1, (x2 - x1) * (y2 - y1))
+                color_quality = (left["color_quality"] * left["area"] + right["color_quality"] * right["area"]) / max(1, union_area)
+                candidate = make_candidate(x1, y1, x2, y2, union_area, color_quality, union_fill, "split-color")
+                if candidate is not None and (best is None or candidate["score"] > best["score"]):
+                    best = candidate
+
+        if best is not None:
+            return best
+
+        for piece in pieces:
+            cursor_inside = piece["x"] + piece["w"] * 0.12 <= cursor_cx <= piece["x"] + piece["w"] * 0.88
+            if piece["w"] < max(min_full_w, int(roi_w * (0.12 if relaxed else 0.14))) and not cursor_inside:
+                continue
+            candidate = make_candidate(
+                piece["x"],
+                piece["y"],
+                piece["x"] + piece["w"],
+                piece["y"] + piece["h"],
+                piece["area"],
+                piece["color_quality"],
+                piece["fill_ratio"],
+                "single-color",
+            )
+            if candidate is not None and (best is None or candidate["score"] > best["score"]):
+                best = candidate
+
+        return best
 
     def _select_green_bar_component(self, mask, roi_w, roi_h, band_y1, band_y2, cursor, hsv=None, relaxed=False):
         count, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, 8)

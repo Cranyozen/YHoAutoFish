@@ -1076,7 +1076,7 @@ class FloatingControlWindow(QFrame):
         pixmap = QPixmap.fromImage(image).scaled(
             self.debug_preview.size(),
             Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
+            Qt.FastTransformation,
         )
         self.debug_preview.setPixmap(pixmap)
 
@@ -1506,7 +1506,7 @@ class AppWindow(QMainWindow):
         pixmap = QPixmap.fromImage(image).scaled(
             self.debug_preview.size(),
             Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
+            Qt.FastTransformation,
         )
         self.debug_preview.setPixmap(pixmap)
         if self.floating_window is not None and self.floating_window.isVisible():
