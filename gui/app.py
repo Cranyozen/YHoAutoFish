@@ -2,6 +2,7 @@ import html
 import json
 import os
 import queue
+import random
 import time
 import ctypes
 from ctypes import wintypes
@@ -30,7 +31,7 @@ from PySide6.QtWidgets import (
 from core.paths import ensure_writable_file, resource_path
 from core.state_machine import StateMachine
 from core.version import APP_AUTHOR, APP_DISPLAY_NAME, APP_REPOSITORY_URL, APP_VERSION
-from core.updater import check_for_update, download_update, start_external_update
+from core.updater import check_for_update, download_update, get_download_candidates, start_external_update
 from gui.encyclopedia import EncyclopediaWidget
 from gui.fishing_record import FishingRecordWidget
 from gui.theme import (
@@ -565,15 +566,17 @@ class UpdateDownloadWorker(QThread):
     progress = Signal(int)
     completed = Signal(bool, str, str)
 
-    def __init__(self, update_info, parent=None):
+    def __init__(self, update_info, source="github", parent=None):
         super().__init__(parent)
         self.update_info = update_info
+        self.source = source
 
     def run(self):
         try:
             path = download_update(
                 self.update_info,
                 progress_callback=lambda percent, _downloaded, _total: self.progress.emit(int(percent)),
+                source=self.source,
             )
             self.completed.emit(True, path, "")
         except Exception as exc:
@@ -867,10 +870,11 @@ class UpdateDialog(QDialog):
         super().__init__(parent)
         self.update_info = update_info
         self.app_window = app_window
+        self.selected_update_source = "github"
         self.setModal(True)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
-        self.resize(720, 500)
+        self.resize(760, 620)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
@@ -914,6 +918,36 @@ class UpdateDialog(QDialog):
         notes.setHtml(f"<div style='font-family:Microsoft YaHei UI; color:#9AB0CA; font-size:13px;'>{release_body}</div>")
         layout.addWidget(notes, 1)
 
+        source_label = QLabel("选择下载源")
+        source_label.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 13px; font-weight: 900;"
+        )
+        layout.addWidget(source_label)
+
+        source_row = QHBoxLayout()
+        source_row.setSpacing(10)
+        self.github_source_btn = QPushButton("GitHub 官方源（默认）\n发布源权威，全球访问更稳；国内网络可能较慢")
+        self.gitee_source_btn = QPushButton("Gitee 国内源\n国内访问通常更快；依赖 Gitee 发行版同步状态")
+        self.source_buttons = {
+            "github": self.github_source_btn,
+            "gitee": self.gitee_source_btn,
+        }
+        for source_name, button in self.source_buttons.items():
+            button.setCheckable(True)
+            button.setFocusPolicy(Qt.NoFocus)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setMinimumHeight(58)
+            button.clicked.connect(lambda _checked=False, name=source_name: self.set_update_source(name))
+            source_row.addWidget(button, 1)
+        layout.addLayout(source_row)
+        self.source_hint = QLabel("")
+        self.source_hint.setWordWrap(True)
+        self.source_hint.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text_dim']}; font-size: 12px;"
+        )
+        layout.addWidget(self.source_hint)
+        self.set_update_source("github")
+
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
@@ -953,7 +987,7 @@ class UpdateDialog(QDialog):
         self.manual_btn.setFocusPolicy(Qt.NoFocus)
         self.manual_btn.setCursor(Qt.PointingHandCursor)
         self.manual_btn.setStyleSheet(secondary_button_stylesheet())
-        self.manual_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(update_info.download_url)))
+        self.manual_btn.clicked.connect(self.open_selected_source_download)
         action_row.addWidget(self.manual_btn)
 
         action_row.addStretch()
@@ -976,12 +1010,60 @@ class UpdateDialog(QDialog):
         self.auto_btn.setEnabled(not busy)
         self.manual_btn.setEnabled(not busy)
         self.close_btn.setEnabled(not busy)
+        for button in self.source_buttons.values():
+            button.setEnabled(not busy)
         if busy:
             self.progress.setFormat("正在下载 %p%")
-            self.status_label.setText("正在下载更新包，请不要关闭程序。")
+            self.status_label.setText(f"正在通过{self.source_display_name()}下载更新包，请不要关闭程序。下载完成后会打开独立安装器显示安装进度。")
 
     def set_progress(self, value):
         self.progress.setValue(max(0, min(100, int(value))))
+
+    def source_button_stylesheet(self):
+        return f"""
+        QPushButton {{
+            background-color: rgba(255, 255, 255, 0.045);
+            border: 1px solid rgba(111, 145, 182, 0.22);
+            border-radius: 12px;
+            color: {APP_COLORS['text_dim']};
+            font-size: 12px;
+            font-weight: 800;
+            text-align: left;
+            padding: 9px 12px;
+        }}
+        QPushButton:checked {{
+            background-color: rgba(34, 211, 214, 0.15);
+            border: 1px solid rgba(99, 228, 228, 0.72);
+            color: {APP_COLORS['text']};
+        }}
+        QPushButton:disabled {{
+            color: rgba(154, 176, 202, 0.45);
+            border-color: rgba(111, 145, 182, 0.10);
+        }}
+        """
+
+    def set_update_source(self, source_name):
+        if source_name not in self.source_buttons:
+            source_name = "github"
+        self.selected_update_source = source_name
+        style = self.source_button_stylesheet()
+        for name, button in self.source_buttons.items():
+            button.setChecked(name == source_name)
+            button.setStyleSheet(style)
+        if source_name == "gitee":
+            self.source_hint.setText("Gitee 国内源适合国内网络环境；如果 Gitee 发行版附件未同步、文件名不一致或下载失败，可切回 GitHub 官方源。")
+        else:
+            self.source_hint.setText("GitHub 官方源为默认源，优先使用项目正式 Release；国内网络不稳定时可以改选 Gitee 国内源。")
+
+    def source_display_name(self):
+        return "Gitee 国内源" if self.selected_update_source == "gitee" else "GitHub 官方源"
+
+    def open_selected_source_download(self):
+        candidates = get_download_candidates(self.update_info, source=self.selected_update_source)
+        if not candidates:
+            self.set_error(f"{self.source_display_name()}没有可用下载地址。")
+            return
+        QDesktopServices.openUrl(QUrl(candidates[0]))
 
     def set_error(self, message):
         self.set_busy(False)
@@ -990,6 +1072,11 @@ class UpdateDialog(QDialog):
         self.status_label.setStyleSheet(
             f"background: transparent; border: none; color: {APP_COLORS['danger']}; font-size: 12px; font-weight: 800;"
         )
+
+    def set_installing_started(self):
+        self.progress.setValue(100)
+        self.progress.setFormat("下载完成，正在切换到安装器")
+        self.status_label.setText("独立安装器已启动。当前版本即将关闭，后续安装进度、安装结果和启动新版按钮会在安装器窗口中显示。")
 
 
 class TakeoverPauseDialog(QDialog):
@@ -2030,8 +2117,8 @@ class AppWindow(QMainWindow):
             "user_takeover_protection": True,
             "user_takeover_mouse_threshold": 12,
             "user_takeover_start_grace": 1.20,
-            "update_check_interval_hours": 6,
-            "update_last_check_at": 0,
+            "update_startup_jitter_seconds": 20,
+            "update_check_interval_minutes": 30,
             "log_line_limit": 320,
             "auto_switch_to_log": True,
             "debug_mode": False,
@@ -2054,8 +2141,10 @@ class AppWindow(QMainWindow):
         self.update_check_worker = None
         self.update_download_worker = None
         self.update_dialog = None
-        self.update_check_interval_ms = int(self._update_check_interval_seconds() * 1000)
         self._update_check_manual_pending = False
+        self.update_poll_timer = QTimer(self)
+        self.update_poll_timer.setSingleShot(True)
+        self.update_poll_timer.timeout.connect(self._run_scheduled_update_check)
         self._settings_building = False
         self._settings_dirty = False
         self._settings_category_buttons = []
@@ -2072,10 +2161,6 @@ class AppWindow(QMainWindow):
 
         self.init_animation_timer = QTimer(self)
         self.init_animation_timer.timeout.connect(self._tick_init_animation)
-
-        self.update_check_timer = QTimer(self)
-        self.update_check_timer.setInterval(self.update_check_interval_ms)
-        self.update_check_timer.timeout.connect(lambda: self.start_update_check(manual=False))
 
     def load_config(self):
         if not os.path.exists(CONFIG_FILE):
@@ -2106,31 +2191,50 @@ class AppWindow(QMainWindow):
             print(f"Config save error: {exc}")
             return False
 
-    def _update_check_interval_seconds(self):
+    def _initial_update_check_delay_ms(self):
         try:
-            hours = float(self.config.get("update_check_interval_hours", 6))
+            jitter = float(self.config.get("update_startup_jitter_seconds", 20))
         except (TypeError, ValueError):
-            hours = 6
-        return max(1.0, hours) * 60 * 60
+            jitter = 20
+        return int((0.9 + random.uniform(0, max(0.0, jitter))) * 1000)
 
-    def _should_skip_auto_update_check(self):
+    def _update_check_interval_ms(self):
         try:
-            last_check = float(self.config.get("update_last_check_at", 0) or 0)
+            minutes = float(self.config.get("update_check_interval_minutes", 30))
         except (TypeError, ValueError):
-            last_check = 0
-        return last_check > 0 and time.time() - last_check < self._update_check_interval_seconds()
+            minutes = 30
+        if minutes <= 0:
+            return 0
+        minutes = max(5.0, min(720.0, minutes))
+        return int(minutes * 60 * 1000)
 
-    def _record_update_check_finished(self):
-        self.config["update_last_check_at"] = time.time()
-        self._save_config_silent()
+    def _next_update_poll_delay_ms(self):
+        interval_ms = self._update_check_interval_ms()
+        if interval_ms <= 0:
+            return 0
+        return int(interval_ms * random.uniform(0.85, 1.15))
+
+    def _schedule_update_check(self, initial=False):
+        if not hasattr(self, "update_poll_timer"):
+            return
+        if self.update_info is not None:
+            self.update_poll_timer.stop()
+            return
+        delay_ms = self._initial_update_check_delay_ms() if initial else self._next_update_poll_delay_ms()
+        if delay_ms <= 0:
+            self.update_poll_timer.stop()
+            return
+        self.update_poll_timer.start(delay_ms)
+
+    def _run_scheduled_update_check(self):
+        if self.update_info is not None:
+            return
+        self.start_update_check(manual=False)
 
     def _sync_runtime_preferences(self):
         self.config["log_line_limit"] = int(self.config.get("log_line_limit", 320))
         self.log_deque = deque(self.log_deque, maxlen=self.config["log_line_limit"])
         self._log_version += 1
-        self.update_check_interval_ms = int(self._update_check_interval_seconds() * 1000)
-        if hasattr(self, "update_check_timer"):
-            self.update_check_timer.setInterval(self.update_check_interval_ms)
         if hasattr(self, "log_textbox"):
             self.log_textbox.setText("\n".join(self.log_deque))
         self._apply_state_machine_config()
@@ -2293,6 +2397,8 @@ class AppWindow(QMainWindow):
             self.toast.reposition()
 
     def closeEvent(self, event):
+        if hasattr(self, "update_poll_timer"):
+            self.update_poll_timer.stop()
         if self.floating_window is not None:
             self.floating_window.close()
         super().closeEvent(event)
@@ -2321,18 +2427,13 @@ class AppWindow(QMainWindow):
         if result != QDialog.Accepted:
             self.close()
             return
-        self._start_update_polling()
-        QTimer.singleShot(900, lambda: self.start_update_check(manual=False))
+        self._schedule_update_check(initial=True)
 
     def show_about_dialog(self):
         self.about_dialog = AboutDialog(self)
         dialog = self.about_dialog
         dialog.move(self.geometry().center() - dialog.rect().center())
         dialog.open()
-
-    def _start_update_polling(self):
-        if not self.update_check_timer.isActive():
-            self.update_check_timer.start()
 
     def _set_update_checking(self, checking):
         title_brand = getattr(getattr(self, "title_bar", None), "title_brand", None)
@@ -2342,14 +2443,13 @@ class AppWindow(QMainWindow):
     def start_update_check(self, manual=False):
         if self.update_info is not None and not manual:
             return
-        if not manual and self._should_skip_auto_update_check():
-            self._set_update_checking(False)
-            return
         if manual:
             self._update_check_manual_pending = True
             self._set_update_checking(True)
         if self.update_check_worker is not None and self.update_check_worker.isRunning():
             return
+        if not manual and hasattr(self, "update_poll_timer"):
+            self.update_poll_timer.stop()
         if self.update_info is None:
             self._set_update_checking(True)
         self.update_check_worker = UpdateCheckWorker(self)
@@ -2361,8 +2461,6 @@ class AppWindow(QMainWindow):
         self.update_check_worker = None
         manual = self._update_check_manual_pending
         self._update_check_manual_pending = False
-        if not manual or not error:
-            self._record_update_check_finished()
         if update_info is None:
             self.update_info = None
             self._set_update_checking(False)
@@ -2372,10 +2470,11 @@ class AppWindow(QMainWindow):
                     self.show_toast("检查更新失败，请稍后重试", "danger")
             elif manual:
                 self.show_toast("当前已是最新版本", "success")
+            self._schedule_update_check(initial=False)
             return
         self.update_info = update_info
-        if self.update_check_timer.isActive():
-            self.update_check_timer.stop()
+        if hasattr(self, "update_poll_timer"):
+            self.update_poll_timer.stop()
         title_brand = getattr(getattr(self, "title_bar", None), "title_brand", None)
         if title_brand is not None:
             title_brand.set_update_info(update_info)
@@ -2407,7 +2506,7 @@ class AppWindow(QMainWindow):
         if self.update_download_worker is not None and self.update_download_worker.isRunning():
             return
         dialog.set_busy(True)
-        self.update_download_worker = UpdateDownloadWorker(self.update_info, self)
+        self.update_download_worker = UpdateDownloadWorker(self.update_info, source=dialog.selected_update_source, parent=self)
         self.update_download_worker.progress.connect(dialog.set_progress)
         self.update_download_worker.completed.connect(lambda ok, path, error: self._handle_update_download_result(ok, path, error, dialog))
         self.update_download_worker.finished.connect(self.update_download_worker.deleteLater)
@@ -2419,20 +2518,26 @@ class AppWindow(QMainWindow):
             dialog.set_error(error or "更新包下载失败。")
             return
         try:
-            start_external_update(path, main_pid=os.getpid())
+            start_external_update(path, main_pid=os.getpid(), version=self.update_info.version)
         except Exception as exc:
             dialog.set_error(str(exc))
             return
 
-        dialog.progress.setValue(100)
-        dialog.progress.setFormat("下载完成，正在启动更新器")
-        dialog.status_label.setText("独立更新器已启动，程序即将退出并自动替换文件。")
+        dialog.set_installing_started()
         self.write_log("[更新] 更新包已下载，正在退出并交由独立更新器安装。")
         if self.sm.is_running:
             self.sm.stop()
         if self.floating_window is not None:
             self.floating_window.close()
-        QTimer.singleShot(650, QApplication.quit)
+        QTimer.singleShot(500, self._quit_for_update_install)
+
+    def _quit_for_update_install(self):
+        if self.sm.is_running:
+            self.sm.stop()
+        if self.floating_window is not None:
+            self.floating_window.close()
+        QApplication.closeAllWindows()
+        QApplication.quit()
 
     def show_toast(self, text, tone="info"):
         if hasattr(self, "toast"):
@@ -3166,7 +3271,7 @@ class AppWindow(QMainWindow):
 
         display_page, display_layout = self._build_settings_category_page(
             "界面与日志",
-            "控制运行日志保留量、启动后页面跳转和调试溜鱼视图。调试视图会增加少量界面刷新开销。",
+            "控制运行日志保留量、启动后页面跳转、更新检查频率和调试溜鱼视图。调试视图会增加少量界面刷新开销。",
         )
         display_keys = []
         self.slider_log_limit = self._settings_block(
@@ -3195,6 +3300,17 @@ class AppWindow(QMainWindow):
             "debug_mode",
         )
         display_keys.append("debug_mode")
+        self.slider_update_interval = self._settings_block(
+            display_layout,
+            "自动检查更新间隔",
+            "程序启动后会检查一次，运行期间按此间隔轮询静态 latest.json。手动检查始终立即执行，发现新版后会停止后台轮询。",
+            self.config.get("update_check_interval_minutes", 30),
+            10,
+            180,
+            "update_check_interval_minutes",
+            display_suffix="min",
+        )
+        display_keys.append("update_check_interval_minutes")
         display_layout.addStretch()
         self._add_settings_category("界面与日志", display_page, display_keys)
 
@@ -3604,6 +3720,8 @@ class AppWindow(QMainWindow):
     def _save_settings(self):
         self._apply_state_machine_config()
         if self.save_config():
+            if getattr(self, "_agreement_shown", False) and self.update_info is None:
+                self._schedule_update_check(initial=False)
             self._refresh_settings_saved_snapshot()
             self._set_settings_dirty(False)
             self.show_toast("高级设置已保存并应用", "success")
