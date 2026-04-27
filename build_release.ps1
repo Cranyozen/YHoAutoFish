@@ -129,7 +129,7 @@ if (-not [string]::IsNullOrWhiteSpace($NotesFile)) {
     if (-not (Test-Path -LiteralPath $ResolvedNotesFile)) {
         throw "Notes file was not found: $NotesFile"
     }
-    $ReleaseNotes = Get-Content -LiteralPath $ResolvedNotesFile -Raw -Encoding UTF8
+    $ReleaseNotes = [string](Get-Content -LiteralPath $ResolvedNotesFile -Raw -Encoding UTF8)
 } elseif (-not [string]::IsNullOrWhiteSpace($Notes)) {
     $ReleaseNotes = $Notes
 }
