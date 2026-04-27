@@ -45,6 +45,8 @@ def wait_for_process_exit(pid, timeout=60):
         pid = int(pid)
     except (TypeError, ValueError):
         return
+    if pid == os.getpid():
+        raise RuntimeError("主程序 PID 不能是更新器自身 PID，已拒绝继续更新")
     if pid <= 0 or os.name != "nt":
         time.sleep(1.5)
         return
@@ -141,9 +143,16 @@ def copy_with_retries(source, target, attempts=8):
     raise last_error or RuntimeError(f"复制失败: {source} -> {target}")
 
 
-def apply_payload(payload_root, app_dir):
+def current_process_path():
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve()
+    return Path(__file__).resolve()
+
+
+def apply_payload(payload_root, app_dir, runner_path=None):
     copied = 0
     skipped = 0
+    runner_path = Path(runner_path).resolve() if runner_path else None
     for source in payload_root.rglob("*"):
         if not source.is_file():
             continue
@@ -151,7 +160,15 @@ def apply_payload(payload_root, app_dir):
         if is_protected(relative):
             skipped += 1
             continue
-        copy_with_retries(source, app_dir / relative)
+        target = app_dir / relative
+        if runner_path is not None:
+            try:
+                if target.resolve() == runner_path:
+                    skipped += 1
+                    continue
+            except OSError:
+                pass
+        copy_with_retries(source, target)
         copied += 1
     return copied, skipped
 
@@ -194,7 +211,7 @@ def main(argv=None):
         log(app_dir, "开始解压更新包")
         extract_zip_safely(package, extract_root)
         payload_root = find_payload_root(extract_root, args.exe)
-        copied, skipped = apply_payload(payload_root, app_dir)
+        copied, skipped = apply_payload(payload_root, app_dir, runner_path=current_process_path())
         log(app_dir, f"文件覆盖完成，复制 {copied} 个文件，跳过用户数据 {skipped} 个文件")
         restart_app(app_dir, args.exe)
         log(app_dir, "新版主程序已启动")

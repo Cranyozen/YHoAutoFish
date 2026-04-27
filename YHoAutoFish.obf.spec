@@ -62,6 +62,7 @@ binaries = []
 hiddenimports = [
     "cnocr",
     "cnstd",
+    "core.admin",
     "core.controller",
     "core.dpi",
     "core.paths",
@@ -147,6 +148,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     manifest=str(ROOT / "YHoAutoFish.manifest"),
+    uac_admin=True,
     version=str(ROOT / "version_info.txt"),
     icon=str(ROOT / "build_assets" / "logo.ico"),
 )

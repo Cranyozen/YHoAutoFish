@@ -4,6 +4,11 @@ import os
 # Ensure modules can be found
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+from core.admin import ensure_admin_or_relaunch
+
+if not ensure_admin_or_relaunch():
+    sys.exit(0)
+
 from core.dpi import set_process_dpi_awareness
 
 set_process_dpi_awareness()

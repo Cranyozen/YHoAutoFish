@@ -1,6 +1,8 @@
 param(
     [switch]$Plain,
-    [switch]$SkipInstall
+    [switch]$SkipInstall,
+    [string]$Notes,
+    [string]$NotesFile
 )
 
 $ErrorActionPreference = "Stop"
@@ -93,6 +95,7 @@ Invoke-Checked "python" @(
     "--noconfirm",
     "--onefile",
     "--noconsole",
+    "--uac-admin",
     "--name", "YHoUpdater",
     "--icon", $IconPath,
     "--distpath", $UpdaterDistDir,
@@ -117,6 +120,19 @@ Compress-Archive -Path $DistDir -DestinationPath $ZipPath -Force
 
 $ZipHash = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $ManifestPath = Join-Path $ReleaseDir "latest.json"
+$ReleaseNotes = ""
+if (-not [string]::IsNullOrWhiteSpace($NotesFile)) {
+    $ResolvedNotesFile = $NotesFile
+    if (-not [System.IO.Path]::IsPathRooted($ResolvedNotesFile)) {
+        $ResolvedNotesFile = Join-Path $ProjectRoot $ResolvedNotesFile
+    }
+    if (-not (Test-Path -LiteralPath $ResolvedNotesFile)) {
+        throw "Notes file was not found: $NotesFile"
+    }
+    $ReleaseNotes = Get-Content -LiteralPath $ResolvedNotesFile -Raw -Encoding UTF8
+} elseif (-not [string]::IsNullOrWhiteSpace($Notes)) {
+    $ReleaseNotes = $Notes
+}
 $Manifest = [ordered]@{
     version = $AppVersion
     tag = "v$AppVersion"
@@ -124,7 +140,7 @@ $Manifest = [ordered]@{
     download_url = "$RepositoryUrl/releases/latest/download/$ZipName"
     html_url = "$RepositoryUrl/releases/latest"
     sha256 = $ZipHash
-    notes = ""
+    notes = $ReleaseNotes
     mandatory = $false
     published_at = (Get-Date).ToString("o")
 }

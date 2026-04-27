@@ -756,6 +756,112 @@ class AboutDialog(QDialog):
         layout.addLayout(action_row)
 
 
+class UpdatePolicyConfirmDialog(QDialog):
+    def __init__(self, update_info, app_window, parent=None):
+        super().__init__(parent)
+        self.update_info = update_info
+        self.app_window = app_window
+        self.setModal(True)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.resize(720, 430)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 14, 14, 14)
+        root.setSpacing(0)
+
+        shell = QFrame()
+        shell.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: rgba(14, 22, 34, 0.98);
+                border: 1px solid rgba(241, 190, 103, 0.48);
+                border-radius: 30px;
+            }}
+            """
+        )
+        add_shadow(shell, blur=36, alpha=130, offset=(0, 14))
+        root.addWidget(shell)
+
+        layout = QVBoxLayout(shell)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(16)
+
+        title = QLabel("更新前确认")
+        title.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['text']}; font-size: 30px; font-weight: 900;"
+        )
+        layout.addWidget(title)
+
+        subtitle = QLabel(f"即将查看 v{update_info.version} 更新内容。继续前请再次确认你已知晓并接受用户协议和反侵权协议。")
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet(
+            f"background: transparent; border: none; color: {APP_COLORS['accent_soft']}; font-size: 13px; font-weight: 800;"
+        )
+        layout.addWidget(subtitle)
+
+        notice = QTextEdit()
+        notice.setReadOnly(True)
+        notice.setFocusPolicy(Qt.NoFocus)
+        notice.setStyleSheet(text_edit_stylesheet())
+        notice.setHtml(
+            """
+            <div style="font-family:'Microsoft YaHei UI'; line-height:1.7;">
+              <p style="margin:0 0 10px 0; color:#F3F8FF; font-size:14px; font-weight:800;">
+                点击“确定，继续更新”即表示你已经重新确认以下事项：
+              </p>
+              <p style="margin:0 0 8px 0; color:#9AB0CA; font-size:13px;">
+                1. 本程序仅用于图像识别、自动化流程学习与个人技术研究，不得用于商业牟利、代练代刷、批量传播或破坏公平性的用途。
+              </p>
+              <p style="margin:0 0 8px 0; color:#9AB0CA; font-size:13px;">
+                2. 自动化行为可能违反平台规则并带来账号、设备、收益或其他风险，后果由实际使用者自行承担。
+              </p>
+              <p style="margin:0 0 8px 0; color:#9AB0CA; font-size:13px;">
+                3. 本程序开源免费发布，任何付费出售、卡密售卖、二次打包收费或冒充官方工具的行为均非作者授权。
+              </p>
+            </div>
+            """
+        )
+        layout.addWidget(notice, 1)
+
+        link_row = QHBoxLayout()
+        link_row.setSpacing(10)
+        usage_btn = QPushButton("查看用户协议")
+        usage_btn.setFocusPolicy(Qt.NoFocus)
+        usage_btn.setCursor(Qt.PointingHandCursor)
+        usage_btn.setStyleSheet(secondary_button_stylesheet())
+        usage_btn.clicked.connect(app_window.show_usage_policy)
+        link_row.addWidget(usage_btn)
+
+        infringement_btn = QPushButton("查看反侵权协议")
+        infringement_btn.setFocusPolicy(Qt.NoFocus)
+        infringement_btn.setCursor(Qt.PointingHandCursor)
+        infringement_btn.setStyleSheet(secondary_button_stylesheet())
+        infringement_btn.clicked.connect(app_window.show_anti_infringement_policy)
+        link_row.addWidget(infringement_btn)
+
+        link_row.addStretch()
+        layout.addLayout(link_row)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
+        action_row.addStretch()
+
+        cancel_btn = QPushButton("取消")
+        cancel_btn.setFocusPolicy(Qt.NoFocus)
+        cancel_btn.setStyleSheet(secondary_button_stylesheet())
+        cancel_btn.clicked.connect(self.reject)
+        action_row.addWidget(cancel_btn)
+
+        accept_btn = QPushButton("确定，继续更新")
+        accept_btn.setFocusPolicy(Qt.NoFocus)
+        accept_btn.setCursor(Qt.PointingHandCursor)
+        accept_btn.setStyleSheet(primary_button_stylesheet())
+        accept_btn.clicked.connect(self.accept)
+        action_row.addWidget(accept_btn)
+        layout.addLayout(action_row)
+
+
 class UpdateDialog(QDialog):
     def __init__(self, update_info, app_window, parent=None):
         super().__init__(parent)
@@ -1924,6 +2030,8 @@ class AppWindow(QMainWindow):
             "user_takeover_protection": True,
             "user_takeover_mouse_threshold": 12,
             "user_takeover_start_grace": 1.20,
+            "update_check_interval_hours": 6,
+            "update_last_check_at": 0,
             "log_line_limit": 320,
             "auto_switch_to_log": True,
             "debug_mode": False,
@@ -1946,7 +2054,7 @@ class AppWindow(QMainWindow):
         self.update_check_worker = None
         self.update_download_worker = None
         self.update_dialog = None
-        self.update_check_interval_ms = 6 * 60 * 60 * 1000
+        self.update_check_interval_ms = int(self._update_check_interval_seconds() * 1000)
         self._update_check_manual_pending = False
         self._settings_building = False
         self._settings_dirty = False
@@ -1989,10 +2097,40 @@ class AppWindow(QMainWindow):
             self.write_log(f"[配置] 保存失败: {exc}")
             return False
 
+    def _save_config_silent(self):
+        try:
+            with open(CONFIG_FILE, "w", encoding="utf-8") as file:
+                json.dump(self.config, file, ensure_ascii=False, indent=4)
+            return True
+        except Exception as exc:
+            print(f"Config save error: {exc}")
+            return False
+
+    def _update_check_interval_seconds(self):
+        try:
+            hours = float(self.config.get("update_check_interval_hours", 6))
+        except (TypeError, ValueError):
+            hours = 6
+        return max(1.0, hours) * 60 * 60
+
+    def _should_skip_auto_update_check(self):
+        try:
+            last_check = float(self.config.get("update_last_check_at", 0) or 0)
+        except (TypeError, ValueError):
+            last_check = 0
+        return last_check > 0 and time.time() - last_check < self._update_check_interval_seconds()
+
+    def _record_update_check_finished(self):
+        self.config["update_last_check_at"] = time.time()
+        self._save_config_silent()
+
     def _sync_runtime_preferences(self):
         self.config["log_line_limit"] = int(self.config.get("log_line_limit", 320))
         self.log_deque = deque(self.log_deque, maxlen=self.config["log_line_limit"])
         self._log_version += 1
+        self.update_check_interval_ms = int(self._update_check_interval_seconds() * 1000)
+        if hasattr(self, "update_check_timer"):
+            self.update_check_timer.setInterval(self.update_check_interval_ms)
         if hasattr(self, "log_textbox"):
             self.log_textbox.setText("\n".join(self.log_deque))
         self._apply_state_machine_config()
@@ -2204,6 +2342,9 @@ class AppWindow(QMainWindow):
     def start_update_check(self, manual=False):
         if self.update_info is not None and not manual:
             return
+        if not manual and self._should_skip_auto_update_check():
+            self._set_update_checking(False)
+            return
         if manual:
             self._update_check_manual_pending = True
             self._set_update_checking(True)
@@ -2220,6 +2361,8 @@ class AppWindow(QMainWindow):
         self.update_check_worker = None
         manual = self._update_check_manual_pending
         self._update_check_manual_pending = False
+        if not manual or not error:
+            self._record_update_check_finished()
         if update_info is None:
             self.update_info = None
             self._set_update_checking(False)
@@ -2243,6 +2386,14 @@ class AppWindow(QMainWindow):
         if self.update_info is None:
             self.show_toast("正在检查更新", "info")
             self.start_update_check(manual=True)
+            return
+        if self.update_dialog is not None and self.update_dialog.isVisible():
+            self.update_dialog.raise_()
+            self.update_dialog.activateWindow()
+            return
+        confirm_dialog = UpdatePolicyConfirmDialog(self.update_info, self, self)
+        confirm_dialog.move(self.geometry().center() - confirm_dialog.rect().center())
+        if confirm_dialog.exec() != QDialog.Accepted:
             return
         self.update_dialog = UpdateDialog(self.update_info, self, self)
         dialog = self.update_dialog
