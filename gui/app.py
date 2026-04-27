@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 from core.paths import ensure_writable_file, resource_path
 from core.state_machine import StateMachine
 from core.version import APP_AUTHOR, APP_DISPLAY_NAME, APP_REPOSITORY_URL, APP_VERSION
-from core.updater import check_for_update, download_update, get_download_candidates, start_external_update
+from core.updater import UpdateError, check_for_update, download_update, get_download_candidates, start_external_update
 from gui.encyclopedia import EncyclopediaWidget
 from gui.fishing_record import FishingRecordWidget
 from gui.theme import (
@@ -543,11 +543,15 @@ class RecognitionInitWorker(QThread):
     def run(self):
         try:
             ok = self.state_machine.prepare_recognition_modules()
+            if self.isInterruptionRequested():
+                return
             if ok:
                 self.completed.emit(True, "识别模块初始化完成，可以开始钓鱼。")
             else:
                 self.completed.emit(False, self.state_machine.get_ocr_init_failure_message())
         except Exception as exc:
+            if self.isInterruptionRequested():
+                return
             detail = self.state_machine.get_ocr_init_failure_message()
             self.completed.emit(False, f"{detail} 原始异常: {exc}")
 
@@ -557,9 +561,12 @@ class UpdateCheckWorker(QThread):
 
     def run(self):
         try:
-            self.completed.emit(check_for_update(), "")
+            result = check_for_update(timeout=6)
+            if not self.isInterruptionRequested():
+                self.completed.emit(result, "")
         except Exception as exc:
-            self.completed.emit(None, str(exc))
+            if not self.isInterruptionRequested():
+                self.completed.emit(None, str(exc))
 
 
 class UpdateDownloadWorker(QThread):
@@ -573,14 +580,21 @@ class UpdateDownloadWorker(QThread):
 
     def run(self):
         try:
+            def report_progress(percent, downloaded, total):
+                if self.isInterruptionRequested():
+                    raise UpdateError("更新下载已取消。")
+                self.progress.emit(int(percent))
+
             path = download_update(
                 self.update_info,
-                progress_callback=lambda percent, _downloaded, _total: self.progress.emit(int(percent)),
+                progress_callback=report_progress,
                 source=self.source,
             )
-            self.completed.emit(True, path, "")
+            if not self.isInterruptionRequested():
+                self.completed.emit(True, path, "")
         except Exception as exc:
-            self.completed.emit(False, "", str(exc))
+            if not self.isInterruptionRequested():
+                self.completed.emit(False, "", str(exc))
 
 
 class PolicyDialog(QDialog):
@@ -2142,6 +2156,7 @@ class AppWindow(QMainWindow):
         self.update_download_worker = None
         self.update_dialog = None
         self._update_check_manual_pending = False
+        self._shutting_down = False
         self.update_poll_timer = QTimer(self)
         self.update_poll_timer.setSingleShot(True)
         self.update_poll_timer.timeout.connect(self._run_scheduled_update_check)
@@ -2161,6 +2176,9 @@ class AppWindow(QMainWindow):
 
         self.init_animation_timer = QTimer(self)
         self.init_animation_timer.timeout.connect(self._tick_init_animation)
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self.shutdown_background_tasks)
 
     def load_config(self):
         if not os.path.exists(CONFIG_FILE):
@@ -2215,6 +2233,8 @@ class AppWindow(QMainWindow):
         return int(interval_ms * random.uniform(0.85, 1.15))
 
     def _schedule_update_check(self, initial=False):
+        if getattr(self, "_shutting_down", False):
+            return
         if not hasattr(self, "update_poll_timer"):
             return
         if self.update_info is not None:
@@ -2227,6 +2247,8 @@ class AppWindow(QMainWindow):
         self.update_poll_timer.start(delay_ms)
 
     def _run_scheduled_update_check(self):
+        if getattr(self, "_shutting_down", False):
+            return
         if self.update_info is not None:
             return
         self.start_update_check(manual=False)
@@ -2397,11 +2419,45 @@ class AppWindow(QMainWindow):
             self.toast.reposition()
 
     def closeEvent(self, event):
-        if hasattr(self, "update_poll_timer"):
-            self.update_poll_timer.stop()
+        self.shutdown_background_tasks()
+        super().closeEvent(event)
+
+    def shutdown_background_tasks(self):
+        if getattr(self, "_shutting_down", False):
+            return
+        self._shutting_down = True
+
+        for timer_name in ("update_poll_timer", "timer", "init_animation_timer"):
+            timer = getattr(self, timer_name, None)
+            if timer is not None and timer.isActive():
+                timer.stop()
+
+        if self.sm.is_running:
+            self.sm.stop()
+
         if self.floating_window is not None:
             self.floating_window.close()
-        super().closeEvent(event)
+
+        self._stop_worker_thread("update_download_worker", "更新下载线程", wait_ms=1200)
+        self._stop_worker_thread("update_check_worker", "更新检查线程", wait_ms=1200)
+        self._stop_worker_thread("ocr_init_worker", "识别初始化线程", wait_ms=1800)
+
+    def _stop_worker_thread(self, attr_name, label, wait_ms=1200, terminate_wait_ms=800):
+        worker = getattr(self, attr_name, None)
+        if worker is None:
+            return
+        try:
+            if worker.isRunning():
+                worker.requestInterruption()
+                worker.quit()
+                if not worker.wait(wait_ms):
+                    print(f"[AppWindow] {label}关闭超时，正在强制结束。", flush=True)
+                    worker.terminate()
+                    worker.wait(terminate_wait_ms)
+        except RuntimeError:
+            pass
+        finally:
+            setattr(self, attr_name, None)
 
     def show_usage_agreement(self):
         self.agreement_dialog = UsageAgreementDialog(self)
@@ -2441,6 +2497,8 @@ class AppWindow(QMainWindow):
             title_brand.set_update_checking(checking)
 
     def start_update_check(self, manual=False):
+        if getattr(self, "_shutting_down", False):
+            return
         if self.update_info is not None and not manual:
             return
         if manual:
@@ -2458,6 +2516,8 @@ class AppWindow(QMainWindow):
         self.update_check_worker.start()
 
     def _handle_update_check_result(self, update_info, error):
+        if getattr(self, "_shutting_down", False):
+            return
         self.update_check_worker = None
         manual = self._update_check_manual_pending
         self._update_check_manual_pending = False
@@ -2482,6 +2542,8 @@ class AppWindow(QMainWindow):
         self.show_toast(f"发现新版 v{update_info.version}", "success")
 
     def show_update_dialog(self):
+        if getattr(self, "_shutting_down", False):
+            return
         if self.update_info is None:
             self.show_toast("正在检查更新", "info")
             self.start_update_check(manual=True)
@@ -2500,6 +2562,8 @@ class AppWindow(QMainWindow):
         dialog.open()
 
     def start_auto_update(self, dialog):
+        if getattr(self, "_shutting_down", False):
+            return
         if self.update_info is None:
             dialog.set_error("当前没有可安装的更新信息。")
             return
@@ -2513,6 +2577,8 @@ class AppWindow(QMainWindow):
         self.update_download_worker.start()
 
     def _handle_update_download_result(self, ok, path, error, dialog):
+        if getattr(self, "_shutting_down", False):
+            return
         self.update_download_worker = None
         if not ok:
             dialog.set_error(error or "更新包下载失败。")
@@ -2575,6 +2641,8 @@ class AppWindow(QMainWindow):
         self.start_bot()
 
     def start_module_initialization(self):
+        if getattr(self, "_shutting_down", False):
+            return
         if self.modules_ready:
             self.update_primary_buttons()
             return
@@ -2593,6 +2661,8 @@ class AppWindow(QMainWindow):
         self.ocr_init_worker.start()
 
     def _handle_module_init_result(self, ok, message):
+        if getattr(self, "_shutting_down", False):
+            return
         self.init_animation_timer.stop()
         self.modules_initializing = False
         self.modules_ready = bool(ok)
