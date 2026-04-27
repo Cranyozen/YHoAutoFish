@@ -109,19 +109,17 @@ v1.2 是一次面向稳定性、兼容性和用户体验的正式修复版本。
 - 更新器增加自身进程保护，避免误把更新器自身当作主程序等待或覆盖。
 - 更新下载包、解压目录和更新器运行副本改为写入程序目录 `.updates/`，不再默认占用 C 盘 `%TEMP%`。
 - Gitee 更新改为补查 Release `attach_files`，修复只读 `assets` 导致拿不到真实附件、下载 404 的问题；支持按 `*.zip.001` 连续分卷自动下载并合并。
-- Gitee `latest.json` 读取链路增加多候选地址回退：直链 `latest.json` 偶发 502 时，会继续尝试附件下载接口；发布脚本也会在检测到分卷时自动写入 `gitee_asset_parts`、`github_html_url` 和 `gitee_html_url`。
+- Gitee `latest.json` 读取链路增加多候选地址回退：直链 `latest.json` 偶发 502 时，会继续尝试附件下载接口；更新清单会同时声明 GitHub 页面、Gitee 页面和 Gitee 分卷信息。
 - 更新校验支持源独立 SHA256：GitHub 单包使用 `github_sha256`，Gitee 分卷合并包使用 `gitee_sha256`；下载弹窗新增取消下载，取消时会清理未完成的分卷、合并包和临时目录。
 - 修复取消下载后弹窗停留在“正在取消”的问题，所有用户主动取消路径都会回到“已取消”状态。
 
-### 11. 发布与打包
+### 11. 安装、更新与数据保护
 
 - 主程序和更新器均要求管理员权限。
-- 发布脚本会自动同步版本号到 `version_info.txt`。
-- 发布脚本会生成：
-  - `YHoAutoFish-v1.2-windows.zip`
-  - `latest.json`
-- 发布脚本支持 `-NotesFile` 或 `-Notes`，可把本说明写入 `latest.json`，让程序更新弹窗显示详细更新日志。
-- 发布包会移除作者本地测试 `records.json`，避免污染用户数据。
+- 发布包不包含作者本地测试记录，不会污染用户自己的捕获数据。
+- 自动更新会保护 `config.json`、`records.json`、`records.db`、`logs/`、`screenshots/`、`captures/` 等用户数据。
+- GitHub 源提供完整压缩包；Gitee 国内源提供连续分卷，程序会自动下载、校验、合并并安装。
+- 更新下载支持取消，取消后会清理未完成的分卷、合并包和临时目录。
 
 ## 升级建议
 
@@ -136,11 +134,14 @@ v1.2 是一次面向稳定性、兼容性和用户体验的正式修复版本。
 - 游戏 UI 被遮挡、极低帧率、非标准画面比例或 UI 缩放异常，仍可能影响识别。
 - OCR 识别鱼名和重量依赖结算画面清晰度，偶发识别错误时会在日志中提示。
 
-## 发布文件
+## 下载文件说明
 
-本次 GitHub Release 建议上传：
+本次发布包含以下文件：
 
 - `YHoAutoFish-v1.2-windows.zip`
 - `latest.json`
+- `YHoAutoFish-v1.2-windows.zip.001`
+- `YHoAutoFish-v1.2-windows.zip.002`
+- 其余连续分卷文件
 
-Release 正文可直接粘贴本文件内容。
+普通用户手动下载时建议优先选择完整压缩包。程序内一键更新会自动选择 GitHub 完整包或 Gitee 分卷包，并在安装前完成 SHA256 校验。

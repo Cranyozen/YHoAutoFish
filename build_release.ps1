@@ -3,7 +3,9 @@ param(
     [switch]$SkipInstall,
     [string]$Notes,
     [string]$NotesFile,
-    [string]$GiteeTag
+    [string]$GiteeTag,
+    [int]$GiteePartSizeMB = 100,
+    [switch]$NoGiteeParts
 )
 
 $ErrorActionPreference = "Stop"
@@ -84,6 +86,60 @@ function Get-MergedSha256 {
     }
 }
 
+function Split-ReleaseFile {
+    param(
+        [string]$SourcePath,
+        [string]$OutputDirectory,
+        [int64]$PartSizeBytes
+    )
+
+    if ($PartSizeBytes -le 0) {
+        throw "PartSizeBytes must be greater than 0."
+    }
+
+    $SourceFile = Get-Item -LiteralPath $SourcePath
+    $EscapedName = [Regex]::Escape($SourceFile.Name)
+    Get-ChildItem -LiteralPath $OutputDirectory -File |
+        Where-Object { $_.Name -match "^$EscapedName\.\d{3,4}$" } |
+        Remove-Item -Force
+
+    if ($SourceFile.Length -le $PartSizeBytes) {
+        return @()
+    }
+
+    $Result = New-Object System.Collections.Generic.List[System.IO.FileInfo]
+    $Buffer = New-Object byte[] (1024 * 1024)
+    $InputStream = [System.IO.File]::OpenRead($SourceFile.FullName)
+    try {
+        $PartIndex = 1
+        while ($InputStream.Position -lt $InputStream.Length) {
+            $PartName = "{0}.{1:000}" -f $SourceFile.Name, $PartIndex
+            $PartPath = Join-Path $OutputDirectory $PartName
+            $OutputStream = [System.IO.File]::Create($PartPath)
+            try {
+                $Written = [int64]0
+                while ($Written -lt $PartSizeBytes -and $InputStream.Position -lt $InputStream.Length) {
+                    $Remaining = [Math]::Min([int64]$Buffer.Length, $PartSizeBytes - $Written)
+                    $Read = $InputStream.Read($Buffer, 0, [int]$Remaining)
+                    if ($Read -le 0) {
+                        break
+                    }
+                    $OutputStream.Write($Buffer, 0, $Read)
+                    $Written += $Read
+                }
+            } finally {
+                $OutputStream.Dispose()
+            }
+            $Result.Add((Get-Item -LiteralPath $PartPath))
+            $PartIndex += 1
+        }
+    } finally {
+        $InputStream.Dispose()
+    }
+
+    return @($Result.ToArray())
+}
+
 if (-not $SkipInstall) {
     Invoke-Checked "python" @("-m", "pip", "install", "-r", "requirements.txt")
     Invoke-Checked "python" @("-m", "pip", "install", "-r", "requirements-build.txt")
@@ -149,6 +205,11 @@ New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
 Compress-Archive -Path $DistDir -DestinationPath $ZipPath -Force
 
 $ZipHash = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$SplitPartFiles = @()
+if (-not $NoGiteeParts -and -not [string]::IsNullOrWhiteSpace($GiteeRepositoryUrl)) {
+    $PartSizeBytes = [int64]$GiteePartSizeMB * 1024 * 1024
+    $SplitPartFiles = @(Split-ReleaseFile -SourcePath $ZipPath -OutputDirectory $ReleaseDir -PartSizeBytes $PartSizeBytes)
+}
 $ManifestPath = Join-Path $ReleaseDir "latest.json"
 $ReleaseNotes = ""
 if (-not [string]::IsNullOrWhiteSpace($NotesFile)) {
@@ -174,12 +235,11 @@ $GiteeReleaseUrl = if (-not [string]::IsNullOrWhiteSpace($GiteeRepositoryUrl) -a
 } else {
     ""
 }
-$SplitPartFiles = Get-ChildItem -LiteralPath $ReleaseDir -File |
-    Where-Object { $_.Name -match "^$([Regex]::Escape($ZipName))\.\d{2,4}$" } |
-    Sort-Object Name
+$SplitPartFiles = @($SplitPartFiles | Sort-Object Name)
 $Manifest = [ordered]@{
     version = $AppVersion
     tag = $GitHubTag
+    tag_name = $GitHubTag
     asset_name = $ZipName
     download_url = "$RepositoryUrl/releases/latest/download/$ZipName"
     download_urls = @(
@@ -204,7 +264,7 @@ if (-not [string]::IsNullOrWhiteSpace($GiteeRepositoryUrl) -and -not [string]::I
     $Manifest["gitee_download_urls"] = @(
         "$GiteeRepositoryUrl/releases/download/$GiteeTag/$ZipName"
     )
-    if ($SplitPartFiles.Count -gt 1) {
+    if ($SplitPartFiles.Count -gt 0) {
         $Manifest["gitee_sha256"] = Get-MergedSha256 -Files $SplitPartFiles
         $Manifest["gitee_release_asset_names"] = @("latest.json") + @($SplitPartFiles | ForEach-Object { $_.Name })
         $Manifest["gitee_asset_parts"] = @(
@@ -227,4 +287,10 @@ $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 Write-Host "EXE: $(Join-Path $DistDir "$AppName.exe")"
 Write-Host "ZIP: $ZipPath"
+if ($SplitPartFiles.Count -gt 0) {
+    Write-Host "GITEE PARTS:"
+    foreach ($PartFile in $SplitPartFiles) {
+        Write-Host "  $($PartFile.FullName)"
+    }
+}
 Write-Host "MANIFEST: $ManifestPath"
