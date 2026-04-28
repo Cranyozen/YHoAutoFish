@@ -163,13 +163,14 @@ Gitee 国内源使用连续分卷附件，例如 `YHoAutoFish-v1.2.2-windows.zip
 
 ## 数据保存
 
-用户数据保存在程序目录：
+用户数据保存在程序目录下的独立目录：
 
-- `records.json`：捕获记录、图鉴解锁、统计数据。
-- `config.json`：高级设置与运行偏好。
+- `data/records.json`：捕获记录、图鉴解锁、统计数据。
+- `data/config.json`：高级设置与运行偏好。
+- `debug/`：调试模式下导出的排错截图。
 - `logs/`：更新器日志等运行日志。
 
-发布包不会内置作者测试记录。你可以备份 `records.json` 和 `config.json` 来保留自己的数据。
+发布包不会内置作者测试记录。你可以备份 `data/config.json` 和 `data/records.json` 来保留自己的数据。
 
 ## 常见问题
 

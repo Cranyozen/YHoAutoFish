@@ -28,6 +28,8 @@ PROTECTED_NAMES = {
     "records - 副本.json",
 }
 PROTECTED_DIRS = {
+    "data",
+    "debug",
     "logs",
     "screenshots",
     "captures",

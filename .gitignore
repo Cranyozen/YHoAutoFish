@@ -54,3 +54,6 @@ venv.bak/
 
 # Debug file
 debug*
+
+# Data files
+data/

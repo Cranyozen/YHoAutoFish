@@ -17,8 +17,8 @@ from core.screen_capture import ScreenCapture
 from core.controller import Controller
 from core.vision import VisionCore
 from core.pid import PIDController
+from core.paths import debug_output_path, resource_path
 from core.record_manager import RecordManager
-from core.paths import resource_path
 from core.user_activity_monitor import UserActivityMonitor
 
 logger = logging.getLogger(__name__)
@@ -1769,13 +1769,13 @@ class StateMachine:
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         full_image = self.sc.capture_relative(rect, 0, 0, 1, 1)
         if full_image is not None and full_image.size > 0:
-            path = f"debug_settlement_unknown_{timestamp}.png"
+            path = debug_output_path(f"debug_settlement_unknown_{timestamp}.png")
             cv2.imwrite(path, full_image)
             self._log(f"[排错] 已保存未知鱼类结算截图: {path}")
         for index, roi in enumerate(name_rois, start=1):
             roi_image = self.sc.capture_relative(rect, *roi)
             if roi_image is not None and roi_image.size > 0:
-                path = f"debug_settlement_unknown_name_roi_{timestamp}_{index}.png"
+                path = debug_output_path(f"debug_settlement_unknown_name_roi_{timestamp}_{index}.png")
                 cv2.imwrite(path, roi_image)
 
     def _read_settlement_info(self, rect):
@@ -1980,10 +1980,11 @@ class StateMachine:
         else:
             if self._debug_count % 10 == 0 and self._debug_count <= 30:
                 btn_img = self.sc.capture_relative(rect, *roi)
+                debug_path = debug_output_path("debug_f_btn_roi.png")
                 if btn_img is not None:
-                    cv2.imwrite("debug_f_btn_roi.png", btn_img)
+                    cv2.imwrite(debug_path, btn_img)
                 conf = ready_info.get("confidence") if ready_info else 0.0
-                self._log(f"[排错] 抛竿图标匹配失败，最高置信度: {conf:.2f}。已保存当前截图至根目录 debug_f_btn_roi.png")
+                self._log(f"[排错] 抛竿图标匹配失败，最高置信度: {conf:.2f}。已保存当前截图至: {debug_path}")
             self._sleep_interruptible(0.18)
 
     def _handle_waiting(self, rect, roi):
@@ -2671,7 +2672,7 @@ class StateMachine:
         if image is None or image.size <= 0:
             return
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        path = f"debug_result_empty_ready_{timestamp}.png"
+        path = debug_output_path(f"debug_result_empty_ready_{timestamp}.png")
         cv2.imwrite(path, image)
         kind = (ready_info or {}).get("kind") or "可抛钩界面"
         self._log(f"[排错] {source_label} 未识别到成功/失败但准备判定为空杆，已保存画面: {path}，检测到: {kind}")
