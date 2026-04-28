@@ -26,5 +26,6 @@
     "update_check_interval_minutes": 30,
     "log_line_limit": 800,
     "auto_switch_to_log": true,
-    "debug_mode": true
+    "debug_mode": true,
+    "use_ocr": true
 }

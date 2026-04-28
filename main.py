@@ -1,6 +1,7 @@
 #! python3.9
 import sys
 import os
+import logging
 
 # Ensure modules can be found
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -21,17 +22,21 @@ from core.version import APP_DISPLAY_NAME, APP_NAME, APP_VERSION
 from gui.app import AppWindow
 
 if __name__ == '__main__':
-    print("Starting app...", flush=True)
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="[%(levelname)s] %(name)s: %(message)s",
+    )
+    logging.info("Starting app...")
     app = QApplication(sys.argv)
     
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_DISPLAY_NAME)
     app.setApplicationVersion(APP_VERSION)
     app.setWindowIcon(QIcon(resource_path("logo.jpg")))
-    
-    print("Creating AppWindow...", flush=True)
+
+    logging.info("Creating AppWindow...")
     window = AppWindow()
-    print("Showing AppWindow...", flush=True)
+    logging.info("Showing AppWindow...")
     window.show()
     
     sys.exit(app.exec())

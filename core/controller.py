@@ -1,5 +1,8 @@
+import logging
 import time
 import pydirectinput  # 引入更成熟的底层模拟库
+
+logger = logging.getLogger(__name__)
 
 class Controller:
     """键盘控制器，使用 pydirectinput 解决 3D 游戏屏蔽按键问题"""
@@ -19,7 +22,7 @@ class Controller:
                 pydirectinput.keyDown(key)
                 self.pressed_keys.add(key)
         except Exception as e:
-            print(f"[Controller] KeyDown error: {e}")
+            logger.error("[Controller] KeyDown error: %s", e)
 
     def key_up(self, key_char):
         """释放某键"""
@@ -29,7 +32,7 @@ class Controller:
                 pydirectinput.keyUp(key)
                 self.pressed_keys.remove(key)
         except Exception as e:
-            print(f"[Controller] KeyUp error: {e}")
+            logger.error("[Controller] KeyUp error: %s", e)
 
     def key_tap(self, key_char, duration=0.01):
         """
@@ -42,8 +45,8 @@ class Controller:
             if duration > 0:
                 time.sleep(duration)
             self.key_up(key_char)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error("[Controller] KeyTap error: %s", e)
         
     def release_all(self):
         """释放所有记录在案的被按下的键 (安全保护)"""

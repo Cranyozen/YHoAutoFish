@@ -1,5 +1,6 @@
 import html
 import json
+import logging
 import os
 import queue
 import random
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.paths import ensure_writable_file, resource_path
+from core.log import setup_logging
 from core.state_machine import StateMachine
 from core.version import APP_AUTHOR, APP_DISPLAY_NAME, APP_REPOSITORY_URL, APP_VERSION
 from core.updater import DownloadCancelled, UpdateError, check_for_update, download_update, get_download_candidates, start_external_update
@@ -2264,12 +2266,14 @@ class AppWindow(QMainWindow):
             "log_line_limit": 320,
             "auto_switch_to_log": True,
             "debug_mode": False,
+            "use_ocr": True,
         }
         self.config = dict(self.default_config)
         self.load_config()
 
         self.log_queue = queue.Queue()
         self.debug_queue = queue.Queue()
+        setup_logging(self.log_queue)
         self.log_deque = deque(maxlen=int(self.config.get("log_line_limit", 320)))
         self._log_version = 0
         self.sm = StateMachine(log_queue=self.log_queue, debug_queue=self.debug_queue)
@@ -2315,7 +2319,7 @@ class AppWindow(QMainWindow):
             with open(CONFIG_FILE, "r", encoding="utf-8") as file:
                 self.config.update(json.load(file))
         except Exception as exc:
-            print(f"Config load error: {exc}")
+            logging.error("Config load error: %s", exc)
 
     def save_config(self):
         try:
@@ -2418,6 +2422,7 @@ class AppWindow(QMainWindow):
         self.sm.update_config("user_takeover_mouse_threshold", self.config.get("user_takeover_mouse_threshold", 12))
         self.sm.update_config("user_takeover_start_grace", self.config.get("user_takeover_start_grace", 1.20))
         self.sm.update_config("debug_mode", self.config.get("debug_mode", False))
+        self.sm.update_config("use_ocr", self.config.get("use_ocr", True))
 
     def _refresh_debug_view_state(self):
         if not hasattr(self, "debug_preview"):
@@ -2784,6 +2789,8 @@ class AppWindow(QMainWindow):
     def handle_primary_action(self):
         if self.sm.is_running:
             return
+        if not self.config.get("use_ocr", True):
+            self.modules_ready = True
         if not self.modules_ready:
             self.start_module_initialization()
             return
@@ -2794,6 +2801,11 @@ class AppWindow(QMainWindow):
             return
         if self.modules_ready:
             self.update_primary_buttons()
+            return
+        if not self.config.get("use_ocr", True):
+            self.modules_ready = True
+            self.update_primary_buttons()
+            self.write_log("[系统] OCR 识别已关闭，跳过模块初始化，将使用图像匹配识别鱼名。")
             return
         if self.modules_initializing:
             return
@@ -3518,6 +3530,13 @@ class AppWindow(QMainWindow):
             self.config.get("debug_mode", False),
             "debug_mode",
         )
+        self.ocr_button = self._settings_toggle_block(
+            content_layout,
+            "启用 OCR 识别",
+            "关闭后跳过 OCR 模块初始化，仅用图像模板匹配识别鱼名（适用于无法安装 OCR 依赖的环境）。关闭后重量将无法通过 OCR 识别，仅靠模板匹配，重量记录精度会下降。",
+            self.config.get("use_ocr", True),
+            "use_ocr",
+        )
         display_keys.append("debug_mode")
         self.slider_update_interval = self._settings_block(
             display_layout,
@@ -4072,6 +4091,8 @@ class AppWindow(QMainWindow):
     def start_bot(self):
         if self.sm.is_running:
             return
+        if not self.config.get("use_ocr", True):
+            self.modules_ready = True
         if not self.modules_ready:
             self.start_module_initialization()
             return
